@@ -1,0 +1,22 @@
+# Files Git must never send to GitHub.
+
+# The database login. Every computer has its own config.php:
+# on my laptop it points to XAMPP, on Plesk to the real database.
+# Use config.example.php as the example instead.
+config.php
+
+# Photos that users upload do not belong in the repository.
+# The empty folders are kept with a .gitkeep file (added in step 11).
+uploads/*
+!uploads/recipes/
+uploads/recipes/*
+!uploads/recipes/.gitkeep
+
+# Editor settings, these differ per person.
+.vscode/
+.idea/
+
+# Junk files from Windows, OneDrive and macOS.
+Thumbs.db
+desktop.ini
+.DS_Store
