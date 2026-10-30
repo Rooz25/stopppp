@@ -19,3 +19,8 @@ define('DB_HOST', 'localhost');
 define('DB_NAME', 'ontkoking');
 define('DB_USER', 'jouw_gebruikersnaam');
 define('DB_PASS', 'jouw_wachtwoord');
+
+// The folder the website runs in, with a slash at the start and the end.
+// In a subfolder of htdocs this becomes for example /stopppp/
+// In the root of a domain (Plesk) it stays just /
+define('BASE_URL', '/');

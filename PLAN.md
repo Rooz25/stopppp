@@ -45,9 +45,11 @@ Also good to know:
 
 - [~] **Home page with real recipes** - `index.php` is an empty shell, the data would come from the
       missing `api.php`. *(teammate file)*
-- [~] **Overview page per category** - `recepten.php` is an empty stub. Category filtering only
-      exists client-side in `script.js` on a hardcoded list.
-- [ ] **Detail page** (photo, prep time, servings, categories, ingredients, steps, author) - no `recept.php`.
+- [x] **Overview page per category** - done in step 5. `recepten.php` lists all recipes from the
+      database and filters on `?categorie=`. The filter buttons are built from the categories that
+      actually have recipes, so nothing is hardcoded.
+- [x] **Detail page** (photo, prep time, servings, categories, ingredients, steps, author) - done in
+      step 6 in `recept.php?id=`.
 - [ ] **Add/edit page** with ingredient rows, steps, categories, photo - only a JS form that posts to nothing.
 - [ ] **Register / log in / log out** - no auth code at all. Blocked users not handled.
 - [~] **Search on ingredient or meal type** - `script.js` filters a flat text string in the browser;
@@ -124,22 +126,55 @@ Rooz and Gijs are working on `style.css`, `script.js` and `index.php`.
    **Still open for Tristan:** change the database password in Plesk, and tell Rooz and Gijs that
    after pulling they must copy `config.example.php` to `config.php` themselves.
 
-3. **Foundation: `includes/db.php`, `includes/auth.php`, `includes/functions.php`**
-   PDO connection, session helpers (`isLoggedIn`, `isAdmin`, `requireLogin`, `requireAdmin`),
-   `e()` for escaping and `csrf_token()` / `csrf_check()`.
-   *Test:* the temporary page from step 1 now uses `includes/db.php` and still works.
+3. **[x] Foundation: `includes/db.php`, `includes/auth.php`, `includes/functions.php`** - done 27-10-2026
+   PDO connection (with `EMULATE_PREPARES = false` so the database really does the escaping),
+   session with a httponly/samesite cookie, `isLoggedIn()`, `currentUserId()`, `currentUsername()`,
+   `isAdmin()`, `requireLogin()`, `requireAdmin()`, `mayEditRecipe()`, plus `e()`, `url()` and
+   `csrf_token()` / `csrf_field()` / `csrf_check()`.
+   Added `BASE_URL` to `config.php` so links work both in the local subfolder and in the root on
+   Plesk. A page only needs two requires: `includes/db.php` and `includes/auth.php`.
+   *Tested:* all 12 functions exist, the page prints "4 recepten gevonden", a `<script>` string is
+   shown as text instead of running, a POST with the right token is accepted and a wrong token is
+   refused with HTTP 403.
 
-4. **Shared header + footer** - `templates/header.php` and `templates/footer.php`, copying the
-   existing navbar markup and classes so every new page looks the same.
-   *Test:* a new page shows the navbar and footer with the right styling.
+4. **[x] Shared header + footer** - done 27-10-2026
+   `templates/header.php` and `templates/footer.php`, with the navbar markup and class names copied
+   from the index.php of Rooz and Gijs. The `#hash` links became real page links, the page title is
+   set per page with `$paginaTitel`, and the menu now shows Inloggen/Registreren or
+   Toevoegen/Profiel/Beheer depending on the session. Logging out is a POST form with a CSRF token.
+   `templates/footer.php` holds a temporary 3-line script for the hamburger menu, which moves into
+   `script.js` in step 12.
+   *Tested:* the page renders with navbar, main and footer, `style.css` is served as `text/css`,
+   the title is correct, and the hamburger toggle adds and removes the `open` class.
+   **Found in `style.css` (teammate file, not changed):** line 1 contains `<?php`, which is invalid
+   CSS. Measured in Chrome: the browser parses 45 rules but the first rule
+   `* { box-sizing: border-box; }` is **dropped**, so `box-sizing` falls back to `content-box`
+   everywhere. Rooz or Gijs needs to delete that one line.
+   **Also for them:** the Uitloggen button in the navbar has no styling yet.
 
-5. **Overview page `recepten.php`** - all recipes from the database with cover photo, prep time
-   and categories, plus filtering on one category through `?categorie=`.
-   *Test:* the 4 test recipes appear; `?categorie=Ontbijt` shows only Shakshuka and Overnight oats.
+5. **[x] Overview page `recepten.php`** - done 27-10-2026
+   All recipes with cover photo, prep time, categories and author, newest first. Filtering through
+   `?categorie=` with an `EXISTS` subquery, so a recipe in several categories still appears once.
+   The 13 filter buttons come from the database (only categories that have recipes). Added
+   `templates/recipe-card.php`, reusing the card markup from `script.js`, and a `photoExists()`
+   helper so missing photo files do not show broken images.
+   *Tested:* all = 4 recipes, Ontbijt = Shakshuka + Overnight oats, Diner = Aglio e olio +
+   Chili sin carne, Pasta = 1 recipe, a category that does not exist = 0 recipes with the
+   "Geen recepten gevonden" message. Injection attempts (`' OR '1'='1`, `'; DROP TABLE recipes; --`,
+   `UNION SELECT`) all return 0 recipes and the tables are untouched; `<script>` in the URL is
+   printed as text.
 
-6. **Detail page `recept.php?id=`** - photo, prep time, servings, categories, ingredients
-   (amount + unit + name), numbered steps and the author's username.
-   *Test:* `recept.php?id=1` shows 8 ingredients and 4 steps; `?id=999` shows a friendly message.
+6. **[x] Detail page `recept.php?id=`** - done 27-10-2026
+   Cover photo, prep time, servings, author, description, clickable category chips, ingredients with
+   amount and unit, and numbered steps. Added `formatAmount()` so `DECIMAL(8,2)` prints as a Dutch
+   amount (`4.00` becomes `4`, `0.50` becomes `0,5`) and an empty amount becomes "naar smaak".
+   The Bewerken button only appears for the owner or an admin; the real server-side check follows in
+   step 10.
+   *Tested:* `?id=1` shows "20 min", "2 personen - gemaakt door sanne", 6 categories, 8 ingredients
+   (including "zout (naar smaak)") and 4 steps. `?id=3` shows "0,5 stuks banaan". `?id=999`,
+   `?id=abc`, `?id=-1` and a missing id all give HTTP 404 with the message "Recept niet gevonden"
+   in the normal layout. `?id=1' OR '1'='1` simply loads recipe 1, because `(int)` turns that text
+   into the number 1.
 
 7. **Register, log in, log out** - `registreren.php`, `login.php`, `logout.php` with
    `password_hash`/`password_verify`, `session_regenerate_id` after login, and blocked users refused.
@@ -213,6 +248,18 @@ Rooz and Gijs are working on `style.css`, `script.js` and `index.php`.
 - **27-10-2026** - Phase 1 done: repo checked, PLAN.md and CLAUDE.md created. Decisions: separate
   PHP pages, local testing on XAMPP. Found: leaked DB password in Git, `recipes` has no `status`
   column, `script.js` depends on a missing `api.php`.
+- **27-10-2026** - Step 6 done. The cards on the overview are now clickable. The recipe pages are
+  finished for a visitor; from step 7 on the site gets users.
+- **27-10-2026** - Step 5 done. First real page that reads the database. Deliberately used two
+  queries instead of one with `GROUP_CONCAT`, because `ONLY_FULL_GROUP_BY` is off on the local
+  MariaDB but may be on, on the MySQL on Plesk. This way the page cannot break on the server.
+- **27-10-2026** - Step 4 done. Shared header and footer built. Discovered that `style.css` starts
+  with `<?php`, which silently removes the `*` rule with `box-sizing: border-box`. Verified in
+  Chrome, not guessed: the `*` rule is missing from the parsed stylesheet.
+- **27-10-2026** - Step 3 done. Base files in `includes/` built and tested. Made the closing-tag
+  mistake a second time, now inside a comment in `functions.php`: the example
+  `csrf_field()` call in that comment contained a closing tag, so the last two functions were never
+  defined. VS Code warned about it ("Call to unknown function") and was right.
 - **27-10-2026** - Step 2 done. `config.php` is out of Git and ignored, `config.example.php` added.
   The leaked password still needs to be changed in Plesk, because removing a file does not remove
   it from the Git history.

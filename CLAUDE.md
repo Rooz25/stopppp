@@ -43,7 +43,9 @@ toevoegen.php      add / edit a recipe
 registreren.php login.php logout.php
 profiel.php        own recipes
 admin/index.php    manage recipes and users
-includes/          db.php, auth.php, functions.php, config.example.php
+includes/          db.php, auth.php, functions.php
+config.php         database login + BASE_URL (gitignored, in the root)
+config.example.php example without real values (in the root)
 templates/         header.php, footer.php
 uploads/recipes/   uploaded photos
 ```
