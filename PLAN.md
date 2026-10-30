@@ -51,7 +51,8 @@ Also good to know:
 - [x] **Detail page** (photo, prep time, servings, categories, ingredients, steps, author) - done in
       step 6 in `recept.php?id=`.
 - [ ] **Add/edit page** with ingredient rows, steps, categories, photo - only a JS form that posts to nothing.
-- [ ] **Register / log in / log out** - no auth code at all. Blocked users not handled.
+- [x] **Register / log in / log out** - done in step 7. `registreren.php`, `login.php`,
+      `logout.php`. Blocked users are refused.
 - [~] **Search on ingredient or meal type** - `script.js` filters a flat text string in the browser;
       no database search, and its type list (Vega, Onder 20 min) does not match the `categories` table.
 - [ ] **Admin panel** - no `admin/` folder.
@@ -64,7 +65,8 @@ Also good to know:
 - [ ] **Prepared statements** - there are no queries yet.
 - [ ] **htmlspecialchars on all output** - no PHP output yet. (`script.js` has its own `clean()`
       for the browser, which does not help on the server.)
-- [ ] **password_hash / password_verify + session_regenerate_id** - no login exists.
+- [x] **password_hash / password_verify + session_regenerate_id** - done in step 7, in
+      `logInUser()` in `includes/auth.php`.
 - [ ] **Server-side rights check on edit/delete** - none. `script.js` shows a "Bewerken" button to
       everyone and posts a delete to a non-existent endpoint.
 - [~] **Changes through POST + CSRF token** - `script.js` does use POST, but there is **no CSRF token**
@@ -176,9 +178,21 @@ Rooz and Gijs are working on `style.css`, `script.js` and `index.php`.
    in the normal layout. `?id=1' OR '1'='1` simply loads recipe 1, because `(int)` turns that text
    into the number 1.
 
-7. **Register, log in, log out** - `registreren.php`, `login.php`, `logout.php` with
-   `password_hash`/`password_verify`, `session_regenerate_id` after login, and blocked users refused.
-   *Test:* register a new account, log in, log out. A user with `status = 'blocked'` cannot log in.
+7. **[x] Register, log in, log out** - done 30-10-2026
+   `registreren.php` with validation (username 3-50 and only letters/digits/-/_, valid email,
+   password at least 8 and twice the same, username and email not already taken), `login.php` with
+   email *or* username, and `logout.php` which only accepts POST with a CSRF token.
+   `logInUser()` and `logOutUser()` added to `includes/auth.php`, with `session_regenerate_id(true)`
+   against session fixation. The status check comes *after* the password check, so only someone who
+   knows the password learns that an account is blocked.
+   Also fixed: `includes/functions.php` now loads `config.php` itself, so a page that only includes
+   `auth.php` (like `logout.php`) still has `BASE_URL`.
+   *Tested:* 13 automated tests, all passing - POST without a CSRF token gives 403, every validation
+   message appears, the password is stored as a bcrypt hash and not in plain text, a duplicate
+   username is refused, a wrong password gives a generic message, a correct login shows
+   Uitloggen/Toevoegen/Profiel but *not* Beheer, logging out through POST works while
+   `GET logout.php` does nothing, and a `blocked` account cannot log in. Also verified that the
+   three seeded accounts (admin, sanne, jayden) log in with the right roles.
 
 8. **Search on ingredient or meal type** - search field and type filter on `recepten.php`,
    searching the `ingredients` table and the 6 meal types (ontbijt, lunch, diner, voorgerecht,
@@ -248,6 +262,18 @@ Rooz and Gijs are working on `style.css`, `script.js` and `index.php`.
 - **27-10-2026** - Phase 1 done: repo checked, PLAN.md and CLAUDE.md created. Decisions: separate
   PHP pages, local testing on XAMPP. Found: leaked DB password in Git, `recipes` has no `status`
   column, `script.js` depends on a missing `api.php`.
+- **30-10-2026** - Step 7 done. The site has working users now.
+  Two problems solved along the way that had nothing to do with this step:
+  1. `config.php` was missing from the laptop, so every page stopped with "Failed to open stream".
+     Rebuilt from `config.example.php`. The file is gitignored, so it is never on GitHub and has to
+     be recreated by hand on every computer and on Plesk.
+  2. MySQL accepted no connections at all. The XAMPP data folder
+     (`C:\xampp\mysql\data`) contains about 30 junk replication files from 04-06-2026, with names
+     made out of log text. On every start MariaDB tries to start a replication thread for each of
+     them, which blocks the server. Started MySQL with `--skip-slave-start` and it works again.
+     **Permanent fix still open:** with MySQL stopped, empty `multi-master.info` and delete the
+     `master-*.info`, `mysql-relay-bin-*` and `relay-log-*` files. Not done yet, because that means
+     deleting files in the XAMPP folder.
 - **27-10-2026** - Step 6 done. The cards on the overview are now clickable. The recipe pages are
   finished for a visitor; from step 7 on the site gets users.
 - **27-10-2026** - Step 5 done. First real page that reads the database. Deliberately used two

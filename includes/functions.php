@@ -2,6 +2,10 @@
 // Small helper functions used by every page.
 // This file is loaded automatically by includes/auth.php.
 
+// url() needs BASE_URL from config.php. We load that here, so a page that only
+// includes auth.php (like logout.php, which needs no database) still works.
+require_once __DIR__ . '/../config.php';
+
 // ---------------------------------------------------------
 // Printing text safely
 // ---------------------------------------------------------

@@ -61,6 +61,52 @@ function isAdmin(): bool
 }
 
 // ---------------------------------------------------------
+// Logging in and out
+// ---------------------------------------------------------
+
+// Put a user in the session. Used by login.php and registreren.php, so the
+// code only exists in one place.
+// $gebruiker is a row from the users table.
+function logInUser(array $gebruiker): void
+{
+    // Give the session a completely new id, and throw the old one away.
+    // This protects against "session fixation": an attacker who somehow knew
+    // your session id beforehand cannot use it after you log in.
+    session_regenerate_id(true);
+
+    // Only these three things go in the session. Never the password hash.
+    $_SESSION['user_id']  = (int) $gebruiker['id'];
+    $_SESSION['username'] = $gebruiker['username'];
+    $_SESSION['role']     = $gebruiker['role'];
+}
+
+// Empty the session completely.
+function logOutUser(): void
+{
+    // 1. Clear all the data.
+    $_SESSION = [];
+
+    // 2. Also tell the browser to throw the session cookie away, by giving it
+    //    an expiry date in the past.
+    if (ini_get('session.use_cookies')) {
+        $cookie = session_get_cookie_params();
+
+        setcookie(
+            session_name(),
+            '',
+            time() - 42000,
+            $cookie['path'],
+            $cookie['domain'],
+            $cookie['secure'],
+            $cookie['httponly']
+        );
+    }
+
+    // 3. And remove the session on the server.
+    session_destroy();
+}
+
+// ---------------------------------------------------------
 // Guarding pages
 // ---------------------------------------------------------
 
