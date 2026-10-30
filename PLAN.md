@@ -185,6 +185,10 @@ Rooz and Gijs are working on `style.css`, `script.js` and `index.php`.
    `logInUser()` and `logOutUser()` added to `includes/auth.php`, with `session_regenerate_id(true)`
    against session fixation. The status check comes *after* the password check, so only someone who
    knows the password learns that an account is blocked.
+   **At Tristan's request:** after registering you are logged in straight away, so you do not have to
+   type your details a second time. The new row is read back with `lastInsertId()` so the role comes
+   from the database instead of being repeated in the code, and the overview then shows a welcome
+   message.
    Also fixed: `includes/functions.php` now loads `config.php` itself, so a page that only includes
    `auth.php` (like `logout.php`) still has `BASE_URL`.
    *Tested:* 13 automated tests, all passing - POST without a CSRF token gives 403, every validation

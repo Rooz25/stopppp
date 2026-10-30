@@ -95,10 +95,6 @@ require __DIR__ . '/templates/header.php';
         <p class="empty">Je bent uitgelogd.</p>
     <?php endif; ?>
 
-    <?php if (isset($_GET['registreren'])): ?>
-        <p class="empty">Je account is aangemaakt. Je kunt nu inloggen.</p>
-    <?php endif; ?>
-
     <?php // NOTE FOR ROOZ AND GIJS: there is no error style yet, so this uses .empty ?>
     <?php if ($fout !== ''): ?>
         <p class="empty"><strong><?= e($fout) ?></strong></p>

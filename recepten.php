@@ -119,6 +119,14 @@ require __DIR__ . '/templates/header.php';
 <div class="container">
 
     <h1>Receptenoverzicht</h1>
+
+    <?php // Melding na het aanmaken van een account, zie registreren.php. ?>
+    <?php if (isset($_GET['welkom']) && isLoggedIn()): ?>
+        <p class="empty">
+            Welkom <?= e(currentUsername()) ?>, je account is aangemaakt en je bent ingelogd.
+        </p>
+    <?php endif; ?>
+
     <p>Ontdek iets lekkers voor vandaag.</p>
 
     <?php // De filterknoppen. De actieve knop krijgt de klasse "active". ?>

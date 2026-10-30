@@ -111,8 +111,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'hash'     => $hash,
             ]);
 
-            // Doorsturen naar de inlogpagina met een melding.
-            header('Location: ' . url('login.php?registreren=1'));
+            // Het account is aangemaakt. We loggen de bezoeker meteen in,
+            // zodat hij niet direct opnieuw zijn gegevens hoeft in te typen.
+            //
+            // De nieuwe rij halen we eerst op met het id dat de database net
+            // heeft uitgedeeld (lastInsertId). Zo weten we zeker welke rol er
+            // in de database staat, in plaats van die hier te herhalen.
+            $nieuweGebruiker = $pdo->prepare(
+                'SELECT id, username, role
+                   FROM users
+                  WHERE id = :id'
+            );
+            $nieuweGebruiker->execute(['id' => (int) $pdo->lastInsertId()]);
+
+            // logInUser zet de gebruiker in de sessie en geeft de sessie
+            // meteen een nieuw id (session_regenerate_id).
+            logInUser($nieuweGebruiker->fetch());
+
+            // Doorsturen naar het overzicht met een welkomstmelding.
+            header('Location: ' . url('recepten.php?welkom=1'));
             exit;
 
         } catch (PDOException $fout) {
