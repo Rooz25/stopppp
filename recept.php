@@ -1,20 +1,12 @@
 <?php
-// Receptdetailpagina: recept.php?id=1
-// Toont de foto, bereidingstijd, aantal personen, categorieen,
-// de ingredienten met hoeveelheid en eenheid, de stappen en de auteur.
+// Recipe detail page: recept.php?id=1
+// Shows the photo, cooking time, servings, categories, ingredients, steps,
+// author and the save (favorite) button.
 
-require __DIR__ . '/includes/db.php';   // geeft $pdo
-require __DIR__ . '/includes/auth.php'; // sessie, e(), url()
-
-// ---------------------------------------------------------
-// 1. Het id uit de URL halen en controleren
-// ---------------------------------------------------------
-// (int) maakt van de invoer altijd een heel getal. "5" wordt 5, en
-// onzin zoals "abc" of "5 OR 1=1" wordt 0. Daarnaast gaat het id ook nog
-// als parameter in de prepared statement mee.
+require __DIR__ . '/includes/db.php';   // gives $pdo
+require __DIR__ . '/includes/auth.php'; // session, e(), url(), csrf
 
 $id = (int) ($_GET['id'] ?? 0);
-
 $recept = null;
 
 if ($id > 0) {
@@ -32,41 +24,82 @@ if ($id > 0) {
           WHERE r.id = :id'
     );
     $receptStatement->execute(['id' => $id]);
-
-    // fetch() geeft de rij, of false als er niets gevonden is.
     $recept = $receptStatement->fetch() ?: null;
 }
 
 // ---------------------------------------------------------
-// 2. Niet gevonden: nette melding in plaats van een foutpagina
+// Not found: a normal page with a 404 status
 // ---------------------------------------------------------
 
 if ($recept === null) {
-    // 404 betekent voor de browser en voor Google: deze pagina bestaat niet.
     http_response_code(404);
 
     $paginaTitel = 'Recept niet gevonden';
+    $navActive = 'recepten';
     require __DIR__ . '/templates/header.php';
     ?>
-    <div class="container">
-        <h1>Recept niet gevonden</h1>
-        <p class="empty">
-            Dit recept bestaat niet (meer).
-            <a href="<?= e(url('recepten.php')) ?>">Bekijk alle recepten</a>.
-        </p>
+    <div class="container page">
+        <div class="empty-state">
+            <p class="eyebrow">404</p>
+            <h1>Recept niet gevonden</h1>
+            <p>Dit recept bestaat niet (meer).</p>
+            <a class="btn btn-coral" href="<?= e(url('recepten.php')) ?>">Bekijk alle recepten</a>
+        </div>
     </div>
     <?php
     require __DIR__ . '/templates/footer.php';
-    exit; // stoppen, de rest van de pagina hoeft niet meer
+    exit;
 }
 
 // ---------------------------------------------------------
-// 3. De bijbehorende gegevens ophalen
+// Save or unsave this recipe. This changes something in the database, so it
+// uses POST and a CSRF token. The recipe id is checked again on the server.
 // ---------------------------------------------------------
-// Elk onderdeel is een eigen tabel, dus een eigen query.
-// Dat is makkelijker te lezen dan een query met vier joins.
 
-// De foto's. sort_order 0 is de omslagfoto.
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    csrf_check();
+
+    if (!isLoggedIn()) {
+        header('Location: ' . url('login.php'));
+        exit;
+    }
+
+    $actie = $_POST['action'] ?? '';
+
+    if ($actie === 'favorite') {
+        $opslaan = $pdo->prepare(
+            'INSERT IGNORE INTO favorites (user_id, recipe_id)
+             VALUES (:user_id, :recipe_id)'
+        );
+        $opslaan->execute([
+            'user_id'   => currentUserId(),
+            'recipe_id' => $id,
+        ]);
+
+        header('Location: ' . url('recept.php?id=' . $id . '&bewaard=1'));
+        exit;
+    }
+
+    if ($actie === 'unfavorite') {
+        $verwijderen = $pdo->prepare(
+            'DELETE FROM favorites
+              WHERE user_id = :user_id
+                AND recipe_id = :recipe_id'
+        );
+        $verwijderen->execute([
+            'user_id'   => currentUserId(),
+            'recipe_id' => $id,
+        ]);
+
+        header('Location: ' . url('recept.php?id=' . $id . '&verwijderd=1'));
+        exit;
+    }
+}
+
+// ---------------------------------------------------------
+// The rest of the recipe data
+// ---------------------------------------------------------
+
 $fotoStatement = $pdo->prepare(
     'SELECT file_path
        FROM recipe_photos
@@ -76,7 +109,6 @@ $fotoStatement = $pdo->prepare(
 $fotoStatement->execute(['id' => $id]);
 $fotos = $fotoStatement->fetchAll();
 
-// De categorieen.
 $categorieStatement = $pdo->prepare(
     'SELECT c.name
        FROM recipe_categories rc
@@ -87,7 +119,6 @@ $categorieStatement = $pdo->prepare(
 $categorieStatement->execute(['id' => $id]);
 $categorieen = $categorieStatement->fetchAll();
 
-// De ingredienten, in de volgorde waarin ze bij het recept horen.
 $ingredientStatement = $pdo->prepare(
     'SELECT i.name,
             ri.amount,
@@ -100,7 +131,6 @@ $ingredientStatement = $pdo->prepare(
 $ingredientStatement->execute(['id' => $id]);
 $ingredienten = $ingredientStatement->fetchAll();
 
-// De bereidingsstappen, op stapnummer.
 $stapStatement = $pdo->prepare(
     'SELECT step_number,
             instruction
@@ -111,41 +141,74 @@ $stapStatement = $pdo->prepare(
 $stapStatement->execute(['id' => $id]);
 $stappen = $stapStatement->fetchAll();
 
-// De omslagfoto is de eerste uit de lijst, als die er is.
+$isBewaard = false;
+
+if (isLoggedIn()) {
+    $bewaardStatement = $pdo->prepare(
+        'SELECT 1 FROM favorites
+          WHERE user_id = :user_id AND recipe_id = :recipe_id
+          LIMIT 1'
+    );
+    $bewaardStatement->execute([
+        'user_id'   => currentUserId(),
+        'recipe_id' => $id,
+    ]);
+    $isBewaard = (bool) $bewaardStatement->fetchColumn();
+}
+
 $omslagfoto = $fotos[0]['file_path'] ?? null;
+$detailFoto = recipePhoto($omslagfoto);
 
 $paginaTitel = $recept['title'];
+$navActive = 'recepten';
 require __DIR__ . '/templates/header.php';
 ?>
 
-<div class="container">
+<div class="container page detail-page">
+    <a class="back-link" href="<?= e(url('recepten.php')) ?>">&larr; Terug naar recepten</a>
 
-    <p><a href="<?= e(url('recepten.php')) ?>">&larr; Terug naar recepten</a></p>
+    <?php if (isset($_GET['opgeslagen'])): ?>
+        <div class="notice notice-success">Je recept is opgeslagen.</div>
+    <?php elseif (isset($_GET['bewaard'])): ?>
+        <div class="notice notice-success">Recept bewaard. Je vindt het terug op je profiel.</div>
+    <?php elseif (isset($_GET['verwijderd'])): ?>
+        <div class="notice">Recept verwijderd uit je bewaarde recepten.</div>
+    <?php endif; ?>
 
-    <div class="detail">
+    <div class="detail-hero">
+        <div class="detail-media">
+            <?php if ($detailFoto !== ''): ?>
+                <img src="<?= e($detailFoto) ?>" alt="<?= e($recept['title']) ?>">
+            <?php else: ?>
+                <span class="photo-placeholder">Geen foto</span>
+            <?php endif; ?>
+            <span class="time-badge"><?= (int) $recept['prep_time'] ?> min</span>
+        </div>
 
-        <?php // De afbeelding moet een direct kind van .detail zijn voor de opmaak. ?>
-        <?php if (photoExists($omslagfoto)): ?>
-            <img src="<?= e(url($omslagfoto)) ?>" alt="<?= e($recept['title']) ?>">
-        <?php endif; ?>
-
-        <div>
-            <span class="tag"><?= (int) $recept['prep_time'] ?> min</span>
+        <div class="detail-info">
+            <div class="detail-badges">
+                <?php if ($categorieen !== []): ?>
+                    <span class="badge badge-mint"><?= e($categorieen[0]['name']) ?></span>
+                <?php endif; ?>
+                <span class="badge badge-soft">
+                    <?= (int) $recept['servings'] ?>
+                    <?= (int) $recept['servings'] === 1 ? 'persoon' : 'personen' ?>
+                </span>
+            </div>
 
             <h1><?= e($recept['title']) ?></h1>
 
-            <p class="muted">
-                <?= (int) $recept['servings'] ?>
-                <?= (int) $recept['servings'] === 1 ? 'persoon' : 'personen' ?>
-                &middot; gemaakt door <?= e($recept['auteur']) ?>
+            <p class="detail-meta">
+                Door <strong><?= e($recept['auteur']) ?></strong>
+                &middot; <?= date('d-m-Y', strtotime($recept['created_at'])) ?>
             </p>
 
             <?php if ($recept['description'] !== null && $recept['description'] !== ''): ?>
-                <p><?= e($recept['description']) ?></p>
+                <p class="detail-description"><?= e($recept['description']) ?></p>
             <?php endif; ?>
 
             <?php if ($categorieen !== []): ?>
-                <div class="chips">
+                <div class="chip-row detail-chips">
                     <?php foreach ($categorieen as $categorie): ?>
                         <a class="chip"
                            href="<?= e(url('recepten.php?categorie=' . urlencode($categorie['name']))) ?>">
@@ -155,47 +218,51 @@ require __DIR__ . '/templates/header.php';
                 </div>
             <?php endif; ?>
 
-            <?php
-            // De knop Bewerken is er alleen voor de eigenaar en voor een admin.
-            // Belangrijk: dit is alleen het VERBERGEN van de knop. De echte
-            // controle gebeurt in stap 10 op de server zelf, want iemand kan
-            // ook gewoon het adres van de bewerkpagina intypen.
-            ?>
-            <?php if (mayEditRecipe((int) $recept['user_id'])): ?>
-                <div class="actions">
-                    <a class="btn light" href="<?= e(url('toevoegen.php?id=' . (int) $recept['id'])) ?>">
+            <div class="detail-actions">
+                <?php if (isLoggedIn()): ?>
+                    <form method="post" action="<?= e(url('recept.php?id=' . (int) $recept['id'])) ?>">
+                        <?= csrf_field() ?>
+                        <input type="hidden" name="action"
+                               value="<?= $isBewaard ? 'unfavorite' : 'favorite' ?>">
+                        <button class="btn <?= $isBewaard ? 'btn-lime' : 'btn-indigo' ?>" type="submit">
+                            <?= $isBewaard ? '&#9829; Bewaard' : '&#9825; Bewaren' ?>
+                        </button>
+                    </form>
+                <?php else: ?>
+                    <a class="btn btn-indigo" href="<?= e(url('login.php')) ?>">&#9825; Bewaren</a>
+                <?php endif; ?>
+
+                <?php if (mayEditRecipe((int) $recept['user_id'])): ?>
+                    <a class="btn btn-light" href="<?= e(url('toevoegen.php?id=' . (int) $recept['id'])) ?>">
                         Bewerken
                     </a>
-                </div>
-            <?php endif; ?>
+                <?php endif; ?>
+            </div>
         </div>
     </div>
 
-    <div class="panels">
-
-        <section class="panel">
-            <h2>Ingredi&euml;nten</h2>
+    <div class="detail-panels">
+        <section class="panel ingredient-panel">
+            <div class="panel-head">
+                <h2>Ingredi&euml;nten</h2>
+                <span><?= (int) $recept['servings'] ?> personen</span>
+            </div>
 
             <?php if ($ingredienten === []): ?>
                 <p class="muted">Nog geen ingredi&euml;nten toegevoegd.</p>
             <?php else: ?>
-                <ul>
+                <ul class="ingredient-list">
                     <?php foreach ($ingredienten as $ingredient): ?>
                         <?php
-                        // Hoeveelheid en eenheid samenvoegen, bijvoorbeeld "400 g".
-                        // Staat er geen hoeveelheid in de database, dan is het
-                        // "naar smaak", zoals bij zout en peper.
                         $hoeveelheid = trim(
                             formatAmount($ingredient['amount']) . ' ' . ($ingredient['unit'] ?? '')
                         );
                         ?>
                         <li>
-                            <?php if ($hoeveelheid === ''): ?>
-                                <?= e($ingredient['name']) ?>
-                                <span class="muted">(naar smaak)</span>
-                            <?php else: ?>
-                                <?= e($hoeveelheid) ?> <?= e($ingredient['name']) ?>
-                            <?php endif; ?>
+                            <span><?= e($ingredient['name']) ?></span>
+                            <strong class="ing-amount">
+                                <?= $hoeveelheid === '' ? 'naar smaak' : e($hoeveelheid) ?>
+                            </strong>
                         </li>
                     <?php endforeach; ?>
                 </ul>
@@ -203,21 +270,22 @@ require __DIR__ . '/templates/header.php';
         </section>
 
         <section class="panel">
-            <h2>Bereiding</h2>
+            <div class="panel-head">
+                <h2>Bereiding</h2>
+                <span><?= count($stappen) ?> stappen</span>
+            </div>
 
             <?php if ($stappen === []): ?>
                 <p class="muted">Nog geen stappen toegevoegd.</p>
             <?php else: ?>
-                <ol>
+                <ol class="step-list">
                     <?php foreach ($stappen as $stap): ?>
                         <li><?= e($stap['instruction']) ?></li>
                     <?php endforeach; ?>
                 </ol>
             <?php endif; ?>
         </section>
-
     </div>
-
 </div>
 
 <?php require __DIR__ . '/templates/footer.php'; ?>

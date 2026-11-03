@@ -1,39 +1,33 @@
 <?php
-// Receptenoverzicht: alle recepten uit de database, met de mogelijkheid om
-// op een categorie te filteren via ?categorie=Ontbijt
-// Zoeken op ingredient en maaltijdtype komt erbij in stap 8.
+// Recipe overview with search, category chips and the filter card from the
+// design. Everything is filtered in the database with prepared statements.
 
-require __DIR__ . '/includes/db.php';   // geeft $pdo
-require __DIR__ . '/includes/auth.php'; // sessie, e(), url()
+require __DIR__ . '/includes/db.php';   // gives $pdo
+require __DIR__ . '/includes/auth.php'; // session, e(), url()
 
-// Welke categorie heeft de bezoeker gekozen? Leeg betekent: alles tonen.
-// We halen dit uit de URL, dus het is gebruikersinvoer en gaat straks
-// als parameter in een prepared statement.
+$zoekterm         = trim($_GET['q'] ?? '');
 $gekozenCategorie = trim($_GET['categorie'] ?? '');
+$gekozenFilter    = trim($_GET['filter'] ?? '');
+
+$toegestaneFilters = [
+    'snel'      => 'Onder 20 min',
+    'eiwitrijk' => 'High protein',
+    'budget'    => 'Budget',
+    'vega'      => 'Vega',
+    'lunch'     => 'Lunch',
+    'diner'     => 'Diner',
+];
+
+if (!array_key_exists($gekozenFilter, $toegestaneFilters)) {
+    $gekozenFilter = '';
+}
 
 // ---------------------------------------------------------
-// 1. De categorieen voor de filterknoppen
+// 1. The recipes
 // ---------------------------------------------------------
-// Alleen categorieen die echt bij minstens een recept horen.
-// Deze lijst komt uit de database en staat dus nergens hardcoded.
-
-$categorieStatement = $pdo->prepare(
-    'SELECT c.name
-       FROM categories c
-       JOIN recipe_categories rc ON rc.category_id = c.id
-      GROUP BY c.id, c.name
-      ORDER BY c.id'
-);
-$categorieStatement->execute();
-$categorieen = $categorieStatement->fetchAll();
-
-// ---------------------------------------------------------
-// 2. De recepten
-// ---------------------------------------------------------
-// De omslagfoto halen we met een kleine subquery op recipe_photos:
-// sort_order 0 is de omslagfoto, dus we sorteren daarop en nemen de eerste.
 
 $sql = 'SELECT r.id,
+               r.user_id,
                r.title,
                r.description,
                r.prep_time,
@@ -47,22 +41,90 @@ $sql = 'SELECT r.id,
           FROM recipes r
           JOIN users u ON u.id = r.user_id';
 
+$where = [];
 $parameters = [];
 
-// Filteren op categorie. We gebruiken EXISTS, zodat een recept maar een keer
-// in de lijst komt, ook als het in meerdere categorieen zit.
-// De gekozen categorie gaat als :categorie mee als parameter en wordt dus
-// nooit in de query geplakt. Dat is de bescherming tegen SQL-injectie.
+// Search in the title, the description and the ingredient names.
+if ($zoekterm !== '') {
+    $where[] = '(r.title LIKE :q1
+                 OR r.description LIKE :q2
+                 OR EXISTS (
+                        SELECT 1
+                          FROM recipe_ingredients ri
+                          JOIN ingredients i ON i.id = ri.ingredient_id
+                         WHERE ri.recipe_id = r.id
+                           AND i.name LIKE :q3
+                    ))';
+
+    $like = '%' . $zoekterm . '%';
+    $parameters['q1'] = $like;
+    $parameters['q2'] = $like;
+    $parameters['q3'] = $like;
+}
+
+// Category chip. EXISTS keeps a recipe with several categories on the list once.
 if ($gekozenCategorie !== '') {
-    $sql .= ' WHERE EXISTS (
-                  SELECT 1
-                    FROM recipe_categories f
-                    JOIN categories fc ON fc.id = f.category_id
-                   WHERE f.recipe_id = r.id
-                     AND fc.name = :categorie
-              )';
+    $where[] = 'EXISTS (
+                    SELECT 1
+                      FROM recipe_categories rc
+                      JOIN categories c ON c.id = rc.category_id
+                     WHERE rc.recipe_id = r.id
+                       AND c.name = :categorie
+                )';
 
     $parameters['categorie'] = $gekozenCategorie;
+}
+
+// Quick filters from the white filter card.
+switch ($gekozenFilter) {
+    case 'snel':
+        $where[] = 'r.prep_time <= 20';
+        break;
+
+    case 'eiwitrijk':
+        $where[] = "EXISTS (
+                        SELECT 1 FROM recipe_categories rc
+                        JOIN categories c ON c.id = rc.category_id
+                        WHERE rc.recipe_id = r.id AND c.name = 'Eiwitrijk'
+                    )";
+        break;
+
+    case 'budget':
+        $where[] = "EXISTS (
+                        SELECT 1 FROM recipe_categories rc
+                        JOIN categories c ON c.id = rc.category_id
+                        WHERE rc.recipe_id = r.id AND c.name = 'Budget'
+                    )";
+        break;
+
+    case 'vega':
+        $where[] = "EXISTS (
+                        SELECT 1 FROM recipe_categories rc
+                        JOIN categories c ON c.id = rc.category_id
+                        WHERE rc.recipe_id = r.id
+                          AND c.name IN ('Vegetarisch', 'Vegan')
+                    )";
+        break;
+
+    case 'lunch':
+        $where[] = "EXISTS (
+                        SELECT 1 FROM recipe_categories rc
+                        JOIN categories c ON c.id = rc.category_id
+                        WHERE rc.recipe_id = r.id AND c.name = 'Lunch'
+                    )";
+        break;
+
+    case 'diner':
+        $where[] = "EXISTS (
+                        SELECT 1 FROM recipe_categories rc
+                        JOIN categories c ON c.id = rc.category_id
+                        WHERE rc.recipe_id = r.id AND c.name = 'Diner'
+                    )";
+        break;
+}
+
+if ($where !== []) {
+    $sql .= ' WHERE ' . implode(' AND ', $where);
 }
 
 $sql .= ' ORDER BY r.created_at DESC, r.id DESC';
@@ -72,22 +134,12 @@ $receptStatement->execute($parameters);
 $recepten = $receptStatement->fetchAll();
 
 // ---------------------------------------------------------
-// 3. De categorieen per recept erbij zoeken
+// 2. All categories per recipe, for the label on the card
 // ---------------------------------------------------------
-// We doen dit in een tweede query in plaats van in de query hierboven,
-// omdat een recept meerdere categorieen heeft. Met een JOIN zou elk recept
-// dan meerdere keren in de lijst komen.
 
-// Eerst de id's van de gevonden recepten verzamelen.
-$receptIds = [];
-foreach ($recepten as $recept) {
-    $receptIds[] = (int) $recept['id'];
-}
+$receptIds = array_map(static fn(array $recept): int => (int) $recept['id'], $recepten);
 
 if ($receptIds !== []) {
-    // Voor elk id maken we een vraagteken: "?, ?, ?, ?"
-    // Die vraagtekens maken we zelf op basis van het AANTAL recepten,
-    // de waardes zelf gaan nog steeds veilig als parameters mee.
     $plaatshouders = implode(', ', array_fill(0, count($receptIds), '?'));
 
     $labelStatement = $pdo->prepare(
@@ -99,63 +151,143 @@ if ($receptIds !== []) {
     );
     $labelStatement->execute($receptIds);
 
-    // De rijen groeperen per recept: [receptId => ['Ontbijt', 'Lunch']]
     $categorieenPerRecept = [];
     foreach ($labelStatement->fetchAll() as $rij) {
         $categorieenPerRecept[(int) $rij['recipe_id']][] = $rij['name'];
     }
 
-    // En in de receptenlijst zetten als een leesbare tekst.
     foreach ($recepten as $index => $recept) {
-        $lijst = $categorieenPerRecept[(int) $recept['id']] ?? [];
-        $recepten[$index]['categorieen'] = implode(', ', $lijst);
+        $recepten[$index]['categorieen'] = implode(
+            ', ',
+            $categorieenPerRecept[(int) $recept['id']] ?? []
+        );
     }
 }
 
+// Build a link while keeping the other filters.
+$maakUrl = static function (array $wijzigingen = []) use (
+    $zoekterm,
+    $gekozenCategorie,
+    $gekozenFilter
+): string {
+    $parameters = array_merge([
+        'q'         => $zoekterm,
+        'categorie' => $gekozenCategorie,
+        'filter'    => $gekozenFilter,
+    ], $wijzigingen);
+
+    $parameters = array_filter(
+        $parameters,
+        static fn($waarde): bool => $waarde !== '' && $waarde !== null
+    );
+
+    return url('recepten.php' . ($parameters !== [] ? '?' . http_build_query($parameters) : ''));
+};
+
 $paginaTitel = $gekozenCategorie !== '' ? $gekozenCategorie : 'Recepten';
+$navActive = 'recepten';
 require __DIR__ . '/templates/header.php';
 ?>
 
-<div class="container">
-
-    <h1>Receptenoverzicht</h1>
-    <p>Ontdek iets lekkers voor vandaag.</p>
-
-    <?php // De filterknoppen. De actieve knop krijgt de klasse "active". ?>
-    <div class="chips">
-        <a class="chip <?= $gekozenCategorie === '' ? 'active' : '' ?>"
-           href="<?= e(url('recepten.php')) ?>">Alles</a>
-
-        <?php foreach ($categorieen as $categorie): ?>
-            <a class="chip <?= $gekozenCategorie === $categorie['name'] ? 'active' : '' ?>"
-               href="<?= e(url('recepten.php?categorie=' . urlencode($categorie['name']))) ?>">
-                <?= e($categorie['name']) ?>
-            </a>
-        <?php endforeach; ?>
+<div class="container page">
+    <div class="page-heading">
+        <p class="eyebrow">Vind jouw volgende favoriet</p>
+        <h1>Receptenoverzicht</h1>
+        <p>Ontdek iets lekkers voor vandaag. Zoek op ingrediënt of filter op tijd, dieet en maaltijd.</p>
     </div>
 
-    <h2>
-        <?= count($recepten) ?>
-        <?= count($recepten) === 1 ? 'recept' : 'recepten' ?>
+    <form class="search-bar search-bar-wide" method="get" action="<?= e(url('recepten.php')) ?>">
+        <label class="sr-only" for="overview-search">Zoek op recept of ingrediënt</label>
+        <input id="overview-search" type="search" name="q" value="<?= e($zoekterm) ?>"
+               placeholder="Zoek op recept of ingrediënt...">
+
         <?php if ($gekozenCategorie !== ''): ?>
-            in <?= e($gekozenCategorie) ?>
+            <input type="hidden" name="categorie" value="<?= e($gekozenCategorie) ?>">
         <?php endif; ?>
-    </h2>
+        <?php if ($gekozenFilter !== ''): ?>
+            <input type="hidden" name="filter" value="<?= e($gekozenFilter) ?>">
+        <?php endif; ?>
 
-    <?php if ($recepten === []): ?>
+        <button class="btn btn-coral" type="submit">Zoek</button>
+    </form>
 
-        <p class="empty">Geen recepten gevonden.</p>
+    <div class="chip-row overview-chips">
+        <a class="chip <?= $gekozenCategorie === '' && $gekozenFilter === '' ? 'is-active' : '' ?>"
+           href="<?= e($maakUrl(['categorie' => '', 'filter' => ''])) ?>">Alles</a>
+        <a class="chip <?= $gekozenCategorie === 'Ontbijt' ? 'is-active' : '' ?>"
+           href="<?= e($maakUrl(['categorie' => 'Ontbijt', 'filter' => ''])) ?>">Ontbijt</a>
+        <a class="chip <?= $gekozenCategorie === 'Lunch' ? 'is-active' : '' ?>"
+           href="<?= e($maakUrl(['categorie' => 'Lunch', 'filter' => ''])) ?>">Lunch</a>
+        <a class="chip <?= $gekozenCategorie === 'Diner' ? 'is-active' : '' ?>"
+           href="<?= e($maakUrl(['categorie' => 'Diner', 'filter' => ''])) ?>">Diner</a>
+        <a class="chip <?= $gekozenFilter === 'vega' ? 'is-active' : '' ?>"
+           href="<?= e($maakUrl(['categorie' => '', 'filter' => 'vega'])) ?>">Vega</a>
+        <a class="chip <?= $gekozenFilter === 'budget' ? 'is-active' : '' ?>"
+           href="<?= e($maakUrl(['categorie' => '', 'filter' => 'budget'])) ?>">Budget</a>
+    </div>
 
-    <?php else: ?>
+    <div class="overview-layout">
+        <aside class="filter-card">
+            <div class="filter-card-head">
+                <h2>Filters</h2>
+                <?php if ($gekozenFilter !== '' || $gekozenCategorie !== '' || $zoekterm !== ''): ?>
+                    <a href="<?= e(url('recepten.php')) ?>">Wissen</a>
+                <?php endif; ?>
+            </div>
 
-        <div class="cards">
-            <?php foreach ($recepten as $recept): ?>
-                <?php require __DIR__ . '/templates/recipe-card.php'; ?>
-            <?php endforeach; ?>
+            <div class="filter-list">
+                <?php foreach ($toegestaneFilters as $filterWaarde => $filterLabel): ?>
+                    <a class="filter-pill <?= $gekozenFilter === $filterWaarde ? 'is-active' : '' ?>"
+                       href="<?= e($maakUrl(['filter' => $gekozenFilter === $filterWaarde ? '' : $filterWaarde])) ?>">
+                        <?= e($filterLabel) ?>
+                    </a>
+                <?php endforeach; ?>
+            </div>
+
+            <div class="filter-note">
+                <span class="brand-mark brand-mark-small">AA</span>
+                <p>Tip: zoek op een ingrediënt dat je nog in de koelkast hebt.</p>
+            </div>
+        </aside>
+
+        <div class="overview-results">
+            <div class="results-head">
+                <p>
+                    <strong><?= count($recepten) ?></strong>
+                    <?= count($recepten) === 1 ? 'resultaat' : 'resultaten' ?>
+                    <?php if ($zoekterm !== ''): ?>
+                        voor &ldquo;<?= e($zoekterm) ?>&rdquo;
+                    <?php endif; ?>
+                </p>
+
+                <?php if ($gekozenCategorie !== ''): ?>
+                    <span class="active-filter">
+                        <?= e($gekozenCategorie) ?>
+                        <a href="<?= e($maakUrl(['categorie' => ''])) ?>" aria-label="Categorie wissen">&times;</a>
+                    </span>
+                <?php elseif ($gekozenFilter !== ''): ?>
+                    <span class="active-filter">
+                        <?= e($toegestaneFilters[$gekozenFilter]) ?>
+                        <a href="<?= e($maakUrl(['filter' => ''])) ?>" aria-label="Filter wissen">&times;</a>
+                    </span>
+                <?php endif; ?>
+            </div>
+
+            <?php if ($recepten === []): ?>
+                <div class="empty-state">
+                    <h3>Geen recepten gevonden</h3>
+                    <p>Probeer een ander ingrediënt of wis de filters.</p>
+                    <a class="btn btn-indigo" href="<?= e(url('recepten.php')) ?>">Alle recepten</a>
+                </div>
+            <?php else: ?>
+                <div class="recipe-grid">
+                    <?php foreach ($recepten as $recept): ?>
+                        <?php require __DIR__ . '/templates/recipe-card.php'; ?>
+                    <?php endforeach; ?>
+                </div>
+            <?php endif; ?>
         </div>
-
-    <?php endif; ?>
-
+    </div>
 </div>
 
 <?php require __DIR__ . '/templates/footer.php'; ?>

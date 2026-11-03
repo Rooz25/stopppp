@@ -1,0 +1,777 @@
+# AA KOOK! — database blueprint (`db.txt`)
+
+> **Documentation only.** This file is the blueprint of the database that the PHP
+> code expects. Nothing in this file has been executed, no migration was created,
+> and no production database was changed. The source of truth is
+> `ontkoking.sql`; if this document and the export disagree, the export wins.
+
+---
+
+## 1. Quick facts
+
+| Item | Value |
+|---|---|
+| Project | AA KOOK! / Stop de ontkoking |
+| Database engine | MySQL / MariaDB, InnoDB |
+| Database name in the current `config.php` | `FoodFreak` (local, gitignored; change it per environment) |
+| Local test database name | `ontkoking` (recommended in `config.example.php`) |
+| Character set | `utf8mb4` |
+| Collation | `utf8mb4_unicode_ci` |
+| Tables | 9 |
+| Primary access layer | PHP 8 + PDO, native prepared statements |
+| File storage | Recipe photos live on disk; only the relative path is in the database |
+| Passwords | Bcrypt hashes via `password_hash()`, never plain text |
+| Database changes | Only as hand-written SQL for the project owner; never automatic |
+
+The application uses **no migrations, no ORM, no Composer and no npm**. Every page
+runs its own prepared statement. `includes/db.php` connects with:
+
+```php
+PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
+PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+PDO::ATTR_EMULATE_PREPARES   => false,
+```
+
+---
+
+## 2. Overview of the tables
+
+| Table | Purpose | Rows in the test export |
+|---|---|---|
+| `users` | Accounts, role (`user`/`admin`) and status (`active`/`blocked`). | 3 |
+| `recipes` | The recipe itself: title, description, cooking time, servings, owner. | 4 |
+| `recipe_photos` | Photos per recipe; the app requires at least one. Sort order `0` is the cover. | 5 |
+| `steps` | Numbered preparation steps per recipe. | 16 |
+| `ingredients` | Unique ingredient names, shared by recipes. | 21 |
+| `recipe_ingredients` | Link table with amount and unit per recipe/ingredient. | 29 |
+| `categories` | 21 labels: meal moment, course, diet and dish type. | 21 |
+| `recipe_categories` | Many-to-many link between recipes and categories. | 26 |
+| `favorites` | Saved recipes per user. | 3 |
+
+### Entity relationship diagram (text)
+
+```
+users 1 ──────< recipes 1 ──────< recipe_photos
+  │               │
+  │               ├──────< steps
+  │               │
+  │               ├──────< recipe_ingredients >────── 1 ingredients
+  │               │
+  │               ├──────< recipe_categories  >────── 1 categories
+  │               │
+  └───────────────┴──────< favorites >───────────────┘
+```
+
+- A user has many recipes (`1:N`).
+- A recipe has many photos, steps and ingredient links (`1:N`).
+- A recipe has many categories and a category has many recipes (`M:N`).
+- A user can save many recipes and a recipe can be saved by many users (`M:N`).
+- `favorites` is the join table for users and recipes.
+
+---
+
+## 3. Tables in detail
+
+### 3.1 `users`
+
+| Column | Type | Null | Default | Key / notes |
+|---|---|---|---|---|
+| `id` | `INT UNSIGNED` | no | auto increment | Primary key |
+| `username` | `VARCHAR(50)` | no | — | Unique |
+| `email` | `VARCHAR(255)` | no | — | Unique |
+| `password_hash` | `VARCHAR(255)` | no | — | Bcrypt hash from `password_hash()` |
+| `profile_picture` | `VARCHAR(255)` | yes | `NULL` | Not used by the current pages |
+| `bio` | `TEXT` | yes | `NULL` | Shown on the profile page |
+| `role` | `ENUM('user','admin')` | no | `'user'` | Admin pages use `role = 'admin'` |
+| `status` | `ENUM('active','blocked')` | no | `'active'` | A blocked user cannot log in |
+| `created_at` | `DATETIME` | no | `CURRENT_TIMESTAMP` | Used for “member since” |
+| `updated_at` | `DATETIME` | no | `CURRENT_TIMESTAMP ON UPDATE` | Auto-maintained |
+
+Indexes: `PRIMARY KEY (id)`, `UNIQUE uq_users_username (username)`,
+`UNIQUE uq_users_email (email)`.
+
+Used by: `login.php`, `registreren.php`, `logout.php`, `profiel.php`,
+`admin/index.php`, `templates/header.php`.
+
+### 3.2 `recipes`
+
+| Column | Type | Null | Default | Key / notes |
+|---|---|---|---|---|
+| `id` | `INT UNSIGNED` | no | auto increment | Primary key |
+| `user_id` | `INT UNSIGNED` | no | — | Owner; FK to `users.id` |
+| `title` | `VARCHAR(150)` | no | — | Card and detail title |
+| `description` | `TEXT` | yes | `NULL` | Short or long description |
+| `prep_time` | `INT UNSIGNED` | no | — | Minutes; used by the “Snel” filter |
+| `servings` | `INT UNSIGNED` | no | `1` | Number of people |
+| `created_at` | `DATETIME` | no | `CURRENT_TIMESTAMP` | Newest-first ordering |
+| `updated_at` | `DATETIME` | no | `CURRENT_TIMESTAMP ON UPDATE` | Auto-maintained |
+
+Indexes: `PRIMARY KEY (id)`, `KEY idx_recipes_user (user_id)`,
+`KEY idx_recipes_prep_time (prep_time)`.
+Foreign key: `user_id → users.id ON DELETE CASCADE`.
+
+**Important:** there is **no `status` column** on `recipes`. Every row is visible
+on the public pages. The admin table shows the word “online” as a display label,
+not as a database value. Do not assume a publication/offline feature exists.
+
+Used by: `index.php`, `recepten.php`, `recept.php`, `toevoegen.php`,
+`profiel.php`, `admin/index.php`.
+
+### 3.3 `recipe_photos`
+
+| Column | Type | Null | Default | Key / notes |
+|---|---|---|---|---|
+| `id` | `INT UNSIGNED` | no | auto increment | Primary key |
+| `recipe_id` | `INT UNSIGNED` | no | — | FK to `recipes.id` |
+| `file_path` | `VARCHAR(255)` | no | — | Example: `uploads/recipes/abc123.jpg` |
+| `sort_order` | `INT UNSIGNED` | no | `0` | `0` is the cover photo |
+| `created_at` | `DATETIME` | no | `CURRENT_TIMESTAMP` | — |
+| `updated_at` | `DATETIME` | no | `CURRENT_TIMESTAMP ON UPDATE` | — |
+
+Indexes: `PRIMARY KEY (id)`, `KEY idx_photos_recipe (recipe_id)`.
+Foreign key: `recipe_id → recipes.id ON DELETE CASCADE`.
+
+The pages read the cover with `ORDER BY sort_order, id LIMIT 1`. There is no
+unique constraint on `(recipe_id, sort_order)`; the first row wins. The editor
+replaces the first row when a new cover is uploaded and leaves other photos
+alone.
+
+The schema itself allows zero photo rows, but the application enforces an image
+at the form level: a new recipe must include an upload, and an edit may only keep
+an existing photo when that file still exists. If a stored path is missing, the
+pages show a neutral “Geen foto” placeholder; they do **not** substitute a random
+image.
+
+### 3.4 `steps`
+
+| Column | Type | Null | Default | Key / notes |
+|---|---|---|---|---|
+| `id` | `INT UNSIGNED` | no | auto increment | Primary key |
+| `recipe_id` | `INT UNSIGNED` | no | — | FK to `recipes.id` |
+| `step_number` | `INT UNSIGNED` | no | — | 1, 2, 3, … |
+| `instruction` | `TEXT` | no | — | One preparation step |
+| `created_at` | `DATETIME` | no | `CURRENT_TIMESTAMP` | — |
+| `updated_at` | `DATETIME` | no | `CURRENT_TIMESTAMP ON UPDATE` | — |
+
+Indexes: `PRIMARY KEY (id)`, `UNIQUE uq_steps_recipe_number (recipe_id, step_number)`.
+Foreign key: `recipe_id → recipes.id ON DELETE CASCADE`.
+
+The editor deletes and re-inserts all steps for a recipe inside one transaction,
+so the numbers stay consecutive.
+
+### 3.5 `ingredients`
+
+| Column | Type | Null | Default | Key / notes |
+|---|---|---|---|---|
+| `id` | `INT UNSIGNED` | no | auto increment | Primary key |
+| `name` | `VARCHAR(100)` | no | — | Unique, case-insensitive by collation |
+| `created_at` | `DATETIME` | no | `CURRENT_TIMESTAMP` | — |
+| `updated_at` | `DATETIME` | no | `CURRENT_TIMESTAMP ON UPDATE` | — |
+
+Indexes: `PRIMARY KEY (id)`, `UNIQUE uq_ingredients_name (name)`.
+
+The editor looks an ingredient up by name and inserts it only when it is new.
+Because of the `utf8mb4_unicode_ci` collation, `Ui` and `ui` are the same name.
+
+### 3.6 `recipe_ingredients`
+
+| Column | Type | Null | Default | Key / notes |
+|---|---|---|---|---|
+| `recipe_id` | `INT UNSIGNED` | no | — | Part of composite primary key |
+| `ingredient_id` | `INT UNSIGNED` | no | — | Part of composite primary key |
+| `amount` | `DECIMAL(8,2)` | yes | `NULL` | `NULL` means “naar smaak” |
+| `unit` | `VARCHAR(20)` | yes | `NULL` | `g`, `ml`, `stuks`, `el`, `tl`, … |
+| `created_at` | `DATETIME` | no | `CURRENT_TIMESTAMP` | — |
+| `updated_at` | `DATETIME` | no | `CURRENT_TIMESTAMP ON UPDATE` | — |
+
+Indexes: `PRIMARY KEY (recipe_id, ingredient_id)`,
+`KEY idx_ri_ingredient (ingredient_id)`.
+Foreign keys:
+- `recipe_id → recipes.id ON DELETE CASCADE`
+- `ingredient_id → ingredients.id ON DELETE RESTRICT`
+
+One ingredient can appear only once per recipe. The editor removes duplicate
+ingredient names from the submitted lines before inserting.
+
+### 3.7 `categories`
+
+| Column | Type | Null | Default | Key / notes |
+|---|---|---|---|---|
+| `id` | `INT UNSIGNED` | no | auto increment | Primary key |
+| `name` | `VARCHAR(50)` | no | — | Unique |
+| `created_at` | `DATETIME` | no | `CURRENT_TIMESTAMP` | — |
+| `updated_at` | `DATETIME` | no | `CURRENT_TIMESTAMP ON UPDATE` | — |
+
+Indexes: `PRIMARY KEY (id)`, `UNIQUE uq_categories_name (name)`.
+
+The 21 seed values cover four groups:
+
+- Meal moment: `Ontbijt`, `Lunch`, `Diner`, `Snack`
+- Course: `Voorgerecht`, `Hoofdgerecht`, `Nagerecht`, `Bijgerecht`
+- Diet: `Vegetarisch`, `Vegan`, `Glutenvrij`, `Lactosevrij`, `Halal`,
+  `Eiwitrijk`, `Koolhydraatarm`
+- Dish type: `Soep`, `Salade`, `Pasta`, `Rijst & noedels`, `Bakken`, `Budget`
+
+The overview chips link to `Ontbijt`, `Lunch`, `Diner`, `Vega` and `Budget`.
+“Vega” is a UI shortcut that queries the categories `Vegetarisch` and `Vegan`.
+“Snel” is a UI shortcut for `recipes.prep_time <= 20`; it is not a category.
+
+### 3.8 `recipe_categories`
+
+| Column | Type | Null | Default | Key / notes |
+|---|---|---|---|---|
+| `recipe_id` | `INT UNSIGNED` | no | — | Part of composite primary key |
+| `category_id` | `INT UNSIGNED` | no | — | Part of composite primary key |
+| `created_at` | `DATETIME` | no | `CURRENT_TIMESTAMP` | — |
+
+Indexes: `PRIMARY KEY (recipe_id, category_id)`,
+`KEY idx_rc_category (category_id)`.
+Foreign keys:
+- `recipe_id → recipes.id ON DELETE CASCADE`
+- `category_id → categories.id ON DELETE CASCADE`
+
+The overview uses `EXISTS` subqueries so a recipe with several categories still
+appears exactly once.
+
+### 3.9 `favorites`
+
+| Column | Type | Null | Default | Key / notes |
+|---|---|---|---|---|
+| `user_id` | `INT UNSIGNED` | no | — | Part of composite primary key |
+| `recipe_id` | `INT UNSIGNED` | no | — | Part of composite primary key |
+| `created_at` | `DATETIME` | no | `CURRENT_TIMESTAMP` | Ordering on the profile |
+
+Indexes: `PRIMARY KEY (user_id, recipe_id)`,
+`KEY idx_fav_recipe (recipe_id)`.
+Foreign keys:
+- `user_id → users.id ON DELETE CASCADE`
+- `recipe_id → recipes.id ON DELETE CASCADE`
+
+The detail page saves with `INSERT IGNORE` and removes with `DELETE`. The profile
+lists favorites newest first.
+
+---
+
+## 4. Relationships, in one place
+
+| Relationship | Type | FK / join |
+|---|---|---|
+| `users` → `recipes` | 1:N | `recipes.user_id` |
+| `recipes` → `recipe_photos` | 1:N | `recipe_photos.recipe_id` |
+| `recipes` → `steps` | 1:N | `steps.recipe_id` |
+| `recipes` ↔ `ingredients` | M:N | `recipe_ingredients` |
+| `recipes` ↔ `categories` | M:N | `recipe_categories` |
+| `users` ↔ `recipes` (saved) | M:N | `favorites` |
+
+Delete behaviour:
+
+- Delete a user → their recipes, photos, steps, ingredient links, category links
+  and favorites are removed by `ON DELETE CASCADE`.
+- Delete a recipe → its photos, steps, ingredient links, category links and
+  favorites are removed by `ON DELETE CASCADE`.
+- Delete an ingredient → **refused** while a `recipe_ingredients` row still uses it
+  (`ON DELETE RESTRICT`). The app never deletes ingredients.
+- Delete a category → its recipe links are removed (`ON DELETE CASCADE`).
+
+---
+
+## 5. Complete `CREATE TABLE` SQL
+
+> **Fresh install only.** This section drops the nine tables first, exactly like
+> `ontkoking.sql`. Do **not** run it on a database that contains data you want to
+> keep. Nothing here has been executed by the redesign work.
+
+```sql
+SET NAMES utf8mb4;
+SET FOREIGN_KEY_CHECKS = 0;
+
+DROP TABLE IF EXISTS favorites;
+DROP TABLE IF EXISTS recipe_categories;
+DROP TABLE IF EXISTS recipe_ingredients;
+DROP TABLE IF EXISTS steps;
+DROP TABLE IF EXISTS recipe_photos;
+DROP TABLE IF EXISTS recipes;
+DROP TABLE IF EXISTS categories;
+DROP TABLE IF EXISTS ingredients;
+DROP TABLE IF EXISTS users;
+
+SET FOREIGN_KEY_CHECKS = 1;
+
+-- ---------------------------------------------------------
+-- users
+-- ---------------------------------------------------------
+CREATE TABLE users (
+    id              INT UNSIGNED NOT NULL AUTO_INCREMENT,
+    username        VARCHAR(50)  NOT NULL,
+    email           VARCHAR(255) NOT NULL,
+    password_hash   VARCHAR(255) NOT NULL,
+    profile_picture VARCHAR(255) NULL,
+    bio             TEXT         NULL,
+    role            ENUM('user','admin')      NOT NULL DEFAULT 'user',
+    status          ENUM('active','blocked')  NOT NULL DEFAULT 'active',
+    created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_users_username (username),
+    UNIQUE KEY uq_users_email (email)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------------------------------------------------
+-- recipes
+-- ---------------------------------------------------------
+CREATE TABLE recipes (
+    id          INT UNSIGNED NOT NULL AUTO_INCREMENT,
+    user_id     INT UNSIGNED NOT NULL,
+    title       VARCHAR(150) NOT NULL,
+    description TEXT         NULL,
+    prep_time   INT UNSIGNED NOT NULL COMMENT 'minutes',
+    servings    INT UNSIGNED NOT NULL DEFAULT 1,
+    created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    KEY idx_recipes_user (user_id),
+    KEY idx_recipes_prep_time (prep_time),
+    CONSTRAINT fk_recipes_user FOREIGN KEY (user_id)
+        REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------------------------------------------------
+-- recipe_photos
+-- ---------------------------------------------------------
+CREATE TABLE recipe_photos (
+    id         INT UNSIGNED NOT NULL AUTO_INCREMENT,
+    recipe_id  INT UNSIGNED NOT NULL,
+    file_path  VARCHAR(255) NOT NULL,
+    sort_order INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '0 = cover photo',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    KEY idx_photos_recipe (recipe_id),
+    CONSTRAINT fk_photos_recipe FOREIGN KEY (recipe_id)
+        REFERENCES recipes (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------------------------------------------------
+-- steps
+-- ---------------------------------------------------------
+CREATE TABLE steps (
+    id          INT UNSIGNED NOT NULL AUTO_INCREMENT,
+    recipe_id   INT UNSIGNED NOT NULL,
+    step_number INT UNSIGNED NOT NULL,
+    instruction TEXT NOT NULL,
+    created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_steps_recipe_number (recipe_id, step_number),
+    CONSTRAINT fk_steps_recipe FOREIGN KEY (recipe_id)
+        REFERENCES recipes (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------------------------------------------------
+-- ingredients
+-- ---------------------------------------------------------
+CREATE TABLE ingredients (
+    id         INT UNSIGNED NOT NULL AUTO_INCREMENT,
+    name       VARCHAR(100) NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_ingredients_name (name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------------------------------------------------
+-- recipe_ingredients
+-- ---------------------------------------------------------
+CREATE TABLE recipe_ingredients (
+    recipe_id     INT UNSIGNED NOT NULL,
+    ingredient_id INT UNSIGNED NOT NULL,
+    amount        DECIMAL(8,2) NULL COMMENT 'NULL = naar smaak',
+    unit          VARCHAR(20)  NULL COMMENT 'g, ml, stuks, el, tl, ...',
+    created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (recipe_id, ingredient_id),
+    KEY idx_ri_ingredient (ingredient_id),
+    CONSTRAINT fk_ri_recipe FOREIGN KEY (recipe_id)
+        REFERENCES recipes (id) ON DELETE CASCADE,
+    CONSTRAINT fk_ri_ingredient FOREIGN KEY (ingredient_id)
+        REFERENCES ingredients (id) ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------------------------------------------------
+-- categories
+-- ---------------------------------------------------------
+CREATE TABLE categories (
+    id         INT UNSIGNED NOT NULL AUTO_INCREMENT,
+    name       VARCHAR(50) NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_categories_name (name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------------------------------------------------
+-- recipe_categories
+-- ---------------------------------------------------------
+CREATE TABLE recipe_categories (
+    recipe_id   INT UNSIGNED NOT NULL,
+    category_id INT UNSIGNED NOT NULL,
+    created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (recipe_id, category_id),
+    KEY idx_rc_category (category_id),
+    CONSTRAINT fk_rc_recipe FOREIGN KEY (recipe_id)
+        REFERENCES recipes (id) ON DELETE CASCADE,
+    CONSTRAINT fk_rc_category FOREIGN KEY (category_id)
+        REFERENCES categories (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------------------------------------------------
+-- favorites
+-- ---------------------------------------------------------
+CREATE TABLE favorites (
+    user_id    INT UNSIGNED NOT NULL,
+    recipe_id  INT UNSIGNED NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, recipe_id),
+    KEY idx_fav_recipe (recipe_id),
+    CONSTRAINT fk_fav_user FOREIGN KEY (user_id)
+        REFERENCES users (id) ON DELETE CASCADE,
+    CONSTRAINT fk_fav_recipe FOREIGN KEY (recipe_id)
+        REFERENCES recipes (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+```
+
+---
+
+## 6. How the code uses the database
+
+| Page / action | Tables | Important behaviour |
+|---|---|---|
+| Home (`index.php`) | `recipes`, `users`, `recipe_photos`, `recipe_categories`, `categories` | Newest 3 recipes, total count, cover photo and category labels. |
+| Overview (`recepten.php`) | `recipes`, `users`, `recipe_photos`, `recipe_ingredients`, `ingredients`, `recipe_categories`, `categories` | Search in title/description/ingredient, category filter, quick filters, newest first. |
+| Detail (`recept.php`) | all recipe tables, `favorites` | Shows cover, categories, ingredients, steps; save/unsave with POST + CSRF. |
+| Login (`login.php`) | `users` | Login with e-mail **or** username; status checked after password verify. |
+| Register (`registreren.php`) | `users` | Validates, checks duplicates, stores a `password_hash`. |
+| Logout (`logout.php`) | none | POST + CSRF only; clears the session. |
+| Add/edit (`toevoegen.php`) | `recipes`, `steps`, `ingredients`, `recipe_ingredients`, `recipe_categories`, `recipe_photos` | One transaction; owner/admin check on the server; a photo is required; upload validation. |
+| Profile (`profiel.php`) | `users`, `recipes`, `favorites`, the recipe tables | Own recipes and saved recipes. |
+| Admin recipes (`admin/index.php?tab=recepten`) | `recipes`, `users`, `recipe_categories`, `categories`, `recipe_photos` | Lists all recipes, edit link, delete with POST + CSRF. |
+| Admin users (`admin/index.php?tab=gebruikers`) | `users`, `recipes` | Block/unblock or delete a user; cannot act on your own account. |
+| Admin favorites (`admin/index.php?tab=favorieten`) | `favorites`, `users`, `recipes` | Read-only list. |
+| Header (`templates/header.php`) | session only | Shows login state and admin link. |
+
+### Query patterns that matter
+
+**Search + filters** use named parameters and `EXISTS`, never string
+concatenation of user input:
+
+```sql
+-- search
+(r.title LIKE :q1 OR r.description LIKE :q2 OR EXISTS (... i.name LIKE :q3))
+
+-- category chip
+EXISTS (SELECT 1 FROM recipe_categories rc
+        JOIN categories c ON c.id = rc.category_id
+        WHERE rc.recipe_id = r.id AND c.name = :categorie)
+
+-- quick filters
+r.prep_time <= 20
+c.name = 'Eiwitrijk'
+c.name = 'Budget'
+c.name IN ('Vegetarisch', 'Vegan')
+c.name = 'Lunch'
+c.name = 'Diner'
+```
+
+**Save a recipe** is one transaction:
+
+1. insert or update `recipes`;
+2. delete the old `steps`, `recipe_ingredients`, `recipe_categories` for that id;
+3. insert steps with `step_number` 1..n;
+4. look up or insert `ingredients` by name;
+5. insert `recipe_ingredients` with amount/unit;
+6. insert `recipe_categories`;
+7. replace or insert the cover row in `recipe_photos`;
+8. commit. On any exception: roll back and delete a newly uploaded file.
+
+Validation runs before this transaction. It rejects a new recipe without a photo,
+and rejects an edit when neither a new upload nor a readable existing photo is
+available.
+
+**Favorites** use a composite key and are idempotent:
+
+```sql
+INSERT IGNORE INTO favorites (user_id, recipe_id) VALUES (:user_id, :recipe_id);
+DELETE FROM favorites WHERE user_id = :user_id AND recipe_id = :recipe_id;
+```
+
+**Admin user block/unblock** flips `users.status`:
+
+```sql
+UPDATE users
+   SET status = IF(status = 'active', 'blocked', 'active')
+ WHERE id = :id;
+```
+
+---
+
+## 7. Example data
+
+The complete, runnable test data is in `ontkoking.sql`. The rows below show the
+shape of the data without copying a usable login or password into this document.
+Use your own bcrypt hash from `password_hash()` when creating accounts.
+
+### 7.1 Categories (all 21)
+
+```sql
+INSERT INTO categories (id, name) VALUES
+(1,  'Ontbijt'),
+(2,  'Lunch'),
+(3,  'Diner'),
+(4,  'Snack'),
+(5,  'Voorgerecht'),
+(6,  'Hoofdgerecht'),
+(7,  'Nagerecht'),
+(8,  'Bijgerecht'),
+(9,  'Vegetarisch'),
+(10, 'Vegan'),
+(11, 'Glutenvrij'),
+(12, 'Lactosevrij'),
+(13, 'Halal'),
+(14, 'Eiwitrijk'),
+(15, 'Koolhydraatarm'),
+(16, 'Soep'),
+(17, 'Salade'),
+(18, 'Pasta'),
+(19, 'Rijst & noedels'),
+(20, 'Bakken'),
+(21, 'Budget');
+```
+
+### 7.2 Users (shape only)
+
+```sql
+-- Replace '<bcrypt-hash>' with a real result of:
+-- password_hash('your-password', PASSWORD_DEFAULT)
+INSERT INTO users (id, username, email, password_hash, bio, role) VALUES
+(1, 'admin',  'admin@example.test',  '<bcrypt-hash>', 'Beheerder van het platform.', 'admin'),
+(2, 'sanne',  'sanne@example.test',  '<bcrypt-hash>', 'Student, kookt graag snel en goedkoop.', 'user'),
+(3, 'jayden', 'jayden@example.test', '<bcrypt-hash>', 'Plantbased sinds 2024.', 'user');
+```
+
+### 7.3 Recipes
+
+```sql
+INSERT INTO recipes (id, user_id, title, description, prep_time, servings) VALUES
+(1, 2, 'Shakshuka',
+ 'Eieren gepocheerd in een pittige tomatensaus. Perfect voor een lazy zondag.', 20, 2),
+(2, 2, 'Spaghetti aglio e olio',
+ 'Vijf ingredienten, tien minuten, altijd goed.', 10, 2),
+(3, 3, 'Overnight oats met blauwe bessen',
+ 'Avond ervoor maken, ochtend meteen eten.', 5, 1),
+(4, 3, 'Chili sin carne',
+ 'Vullende vegan chili voor de hele week.', 35, 4);
+```
+
+### 7.4 Photos
+
+```sql
+INSERT INTO recipe_photos (recipe_id, file_path, sort_order) VALUES
+(1, 'images/food-01.png', 0),
+(1, 'images/food-02.png', 1),
+(2, 'images/food-03.png', 0),
+(3, 'images/food-04.png', 0),
+(4, 'images/food-05.png', 0);
+```
+
+These seed rows use real files that are already in the repository. Every recipe
+in the test export therefore has a working image without relying on a fallback.
+New recipes must upload their own photo.
+
+### 7.5 Ingredients (first 12 of 21)
+
+```sql
+INSERT INTO ingredients (id, name) VALUES
+(1,  'ei'),
+(2,  'tomatenblokjes'),
+(3,  'ui'),
+(4,  'knoflook'),
+(5,  'paprika'),
+(6,  'komijn'),
+(7,  'olijfolie'),
+(8,  'zout'),
+(9,  'peper'),
+(10, 'spaghetti'),
+(11, 'rode peper'),
+(12, 'peterselie');
+```
+
+### 7.6 Recipe ingredients
+
+```sql
+INSERT INTO recipe_ingredients (recipe_id, ingredient_id, amount, unit) VALUES
+-- Shakshuka
+(1, 1, 4,    'stuks'),
+(1, 2, 400,  'g'),
+(1, 3, 1,    'stuks'),
+(1, 4, 2,    'teentjes'),
+(1, 5, 1,    'stuks'),
+(1, 6, 1,    'tl'),
+(1, 7, 2,    'el'),
+(1, 8, NULL, NULL),
+-- Aglio e olio
+(2, 10, 200, 'g'),
+(2, 4, 4,    'teentjes'),
+(2, 7, 4,    'el'),
+(2, 11, 1,   'stuks'),
+(2, 12, 1,   'handje'),
+(2, 8, NULL, NULL);
+```
+
+### 7.7 Steps
+
+```sql
+INSERT INTO steps (recipe_id, step_number, instruction) VALUES
+(1, 1, 'Snijd de ui en paprika in blokjes en de knoflook fijn.'),
+(1, 2, 'Fruit de ui 3 minuten in olijfolie tot hij glazig is. Voeg paprika, knoflook en komijn toe.'),
+(1, 3, 'Doe de tomatenblokjes erbij en laat 8 minuten zachtjes pruttelen. Breng op smaak met zout.'),
+(1, 4, 'Maak 4 kuiltjes in de saus, breek in elk kuiltje een ei en doe de deksel op de pan tot het eiwit gestold is.'),
+(2, 1, 'Kook de spaghetti in ruim water met zout.'),
+(2, 2, 'Snijd de knoflook in plakjes en de rode peper in ringetjes.'),
+(2, 3, 'Verwarm de olie op laag vuur en bak knoflook en peper 2 minuten tot ze goudgeel zijn.'),
+(2, 4, 'Schep de spaghetti met een scheut kookwater door de olie en bestrooi met peterselie.');
+```
+
+### 7.8 Recipe categories
+
+```sql
+INSERT INTO recipe_categories (recipe_id, category_id) VALUES
+-- Shakshuka: ontbijt, lunch, hoofdgerecht, vegetarisch, glutenvrij, budget
+(1, 1), (1, 2), (1, 6), (1, 9), (1, 11), (1, 21),
+-- Aglio e olio: diner, hoofdgerecht, vegan, pasta, budget
+(2, 3), (2, 6), (2, 9), (2, 10), (2, 18), (2, 21),
+-- Overnight oats: ontbijt, snack, vegetarisch, vegan, lactosevrij
+(3, 1), (3, 4), (3, 9), (3, 10), (3, 12),
+-- Chili sin carne: diner, hoofdgerecht, vegan, glutenvrij, lactosevrij,
+-- eiwitrijk, rijst & noedels, budget
+(4, 3), (4, 6), (4, 9), (4, 10), (4, 11), (4, 12), (4, 14), (4, 19), (4, 21);
+```
+
+### 7.9 Favorites
+
+```sql
+INSERT INTO favorites (user_id, recipe_id) VALUES
+(2, 4),
+(3, 1),
+(3, 2);
+```
+
+---
+
+## 8. Database guidance
+
+### 8.1 Character set and collation
+
+Use `utf8mb4` everywhere so emoji, Dutch accents and recipes from other cuisines
+work. `utf8mb4_unicode_ci` makes `Ui`, `ui` and `ÚI` compare as the same name in
+the unique ingredient/category keys.
+
+### 8.2 Indexes
+
+The current indexes cover the app’s access patterns:
+
+- `recipes.user_id` for the profile and owner checks.
+- `recipes.prep_time` for the “Snel” filter.
+- `recipe_photos.recipe_id`, `steps.recipe_id` and the two link tables for
+  detail and edit pages.
+- `favorites.recipe_id` for recipe deletion and admin counts.
+
+Search uses `LIKE '%term%'`, which cannot use a normal index. For the current
+small dataset that is fine. If the site grows, add a `FULLTEXT` index on
+`recipes.title` and `recipes.description`, or a separate search table. Do that
+as a measured change, not by guessing.
+
+### 8.3 Transactions
+
+`toevoegen.php` wraps the recipe, steps, ingredients, categories and cover photo
+in one transaction. Keep that pattern: a half-saved recipe is worse than a clear
+error. `admin/index.php` delete actions are single statements and rely on the
+foreign keys for cascading.
+
+### 8.4 Uploads
+
+- Upload directory: `uploads/recipes/`.
+- Allowed: jpg, png, webp.
+- Maximum: 4 MB, checked in PHP.
+- Filename: 32 random hex characters plus the extension.
+- Only the relative path is stored in `recipe_photos.file_path`.
+- The directory must be writable by PHP on the server, but should not be
+  executable.
+- A recipe cannot be saved without a photo. The form marks the upload as required
+  and the server repeats the check for new recipes and for edits without a valid
+  existing file.
+- Deleting a recipe removes its uploaded photo files. Seed images in `/images`
+  are shared repository assets and are never deleted.
+
+### 8.5 Security rules for the database layer
+
+- Use prepared statements for every query, including queries without user input.
+- Never build SQL with `$_GET`, `$_POST` or session values.
+- Escape all output with `e()` even when the database is trusted.
+- Keep `config.php` out of Git; `config.example.php` is the template.
+- Use a database user that only needs `SELECT`, `INSERT`, `UPDATE` and `DELETE`
+  on this database. Do not give the website `DROP` or `ALTER`.
+- Store only bcrypt hashes in `users.password_hash`.
+- Check owner/admin rights on the server for every edit and delete.
+- Use POST + CSRF for changes, including logout, favorites and admin actions.
+
+### 8.6 Backups and deployment
+
+1. Take a `mysqldump` before any schema change.
+2. Import `ontkoking.sql` only into an empty test database.
+3. On the server, create the database and a dedicated user in Plesk.
+4. Copy `config.example.php` to `config.php` and fill in the server values,
+   including `BASE_URL` (`/` in the domain root).
+5. Make `uploads/recipes/` writable by PHP.
+6. Replace the seeded test accounts and their passwords before going live.
+7. Test login, add/edit/delete, photo upload, favorites, search and all three
+   admin tabs.
+
+### 8.7 Optional future extension: recipe status (NOT applied)
+
+The design reference shows an “online” status in the admin panel, but the current
+`recipes` table has **no status column** and the code does not use one. The admin
+page displays “online” as a label only.
+
+If offline recipes are wanted later, discuss it first, back up the database, and
+then apply something like:
+
+```sql
+-- NOT part of the current schema. Do not run without approval and a backup.
+ALTER TABLE recipes
+    ADD COLUMN status ENUM('online', 'offline') NOT NULL DEFAULT 'online'
+    AFTER servings,
+    ADD KEY idx_recipes_status (status);
+```
+
+That change would also require code changes on the overview, detail, profile and
+admin pages. Until then, every recipe row is public.
+
+---
+
+## 9. Manual checks before deployment
+
+- [ ] `ontkoking.sql` and the live schema still match this document.
+- [ ] `config.php` exists on the server, is gitignored and contains the new
+      database password.
+- [ ] `BASE_URL` is correct for the server path.
+- [ ] The database user has no `DROP`/`ALTER` rights.
+- [ ] `uploads/recipes/` exists and is writable, but not executable.
+- [ ] The three seeded test accounts have been replaced or their passwords
+      changed.
+- [ ] A database backup exists before the first production change.
+
+---
+
+*This blueprint was written for the redesigned AA KOOK! pages. It intentionally
+does not contain real credentials. The SQL in `ontkoking.sql` remains the
+authoritative export.*

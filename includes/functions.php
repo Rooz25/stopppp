@@ -6,6 +6,21 @@
 // includes auth.php (like logout.php, which needs no database) still works.
 require_once __DIR__ . '/../config.php';
 
+// If config.php has no BASE_URL yet, work it out from the current folder.
+// That keeps the site usable in a local subfolder (for example /stopppp/)
+// without having to edit the config file first. On the server BASE_URL from
+// config.php always wins.
+if (!defined('BASE_URL')) {
+    $scriptPad = str_replace('\\', '/', $_SERVER['SCRIPT_NAME'] ?? '/index.php');
+    $basisMap  = rtrim(dirname($scriptPad), '/');
+
+    if (str_ends_with($basisMap, '/admin')) {
+        $basisMap = substr($basisMap, 0, -6);
+    }
+
+    define('BASE_URL', ($basisMap === '' ? '/' : $basisMap . '/'));
+}
+
 // ---------------------------------------------------------
 // Printing text safely
 // ---------------------------------------------------------
@@ -71,6 +86,26 @@ function photoExists(?string $pad): bool
     }
 
     return is_file(__DIR__ . '/../' . $pad);
+}
+
+// The photo for a recipe card or detail page. A recipe must have a real image,
+// so this returns an empty string when the file is missing. The templates show
+// a neutral "Geen foto" placeholder in that case instead of a random image.
+function recipePhoto(?string $pad): string
+{
+    return photoExists($pad) ? url($pad) : '';
+}
+
+// A short, clean piece of text for on a recipe card.
+function excerpt(?string $tekst, int $lengte = 95): string
+{
+    $tekst = trim(preg_replace('/\s+/', ' ', (string) $tekst));
+
+    if (mb_strlen($tekst) <= $lengte) {
+        return $tekst;
+    }
+
+    return rtrim(mb_substr($tekst, 0, $lengte - 1)) . '…';
 }
 
 // ---------------------------------------------------------

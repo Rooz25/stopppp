@@ -1,26 +1,19 @@
 <?php
-// Inlogpagina.
-// Je kunt inloggen met je e-mailadres of met je gebruikersnaam.
-// Geblokkeerde accounts komen er niet in.
+// Login page. You can log in with your e-mail address or your username.
+// Blocked accounts are refused.
 
-require __DIR__ . '/includes/db.php';   // geeft $pdo
-require __DIR__ . '/includes/auth.php'; // sessie, e(), url(), csrf
+require __DIR__ . '/includes/db.php';   // gives $pdo
+require __DIR__ . '/includes/auth.php'; // session, e(), url(), csrf
 
-// Wie al ingelogd is, hoeft hier niet te zijn.
 if (isLoggedIn()) {
-    header('Location: ' . url('recepten.php'));
+    header('Location: ' . url('profiel.php'));
     exit;
 }
 
 $fout = '';
-
-// Wat de bezoeker had ingevuld, zodat het veld niet leeg is na een fout.
-// Het wachtwoord vullen we nooit opnieuw in.
 $ingevuldeLogin = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-
-    // Eerst de CSRF-token controleren. Bij een verkeerde token stopt de pagina.
     csrf_check();
 
     $login      = trim($_POST['login'] ?? '');
@@ -29,15 +22,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $ingevuldeLogin = $login;
 
     if ($login === '' || $wachtwoord === '') {
-
         $fout = 'Vul je e-mailadres of gebruikersnaam en je wachtwoord in.';
-
     } else {
-
-        // De gebruiker opzoeken op e-mailadres OF gebruikersnaam.
-        // Let op: we gebruiken twee verschillende namen (:email en :username)
-        // met dezelfde waarde. Bij echte prepared statements mag je dezelfde
-        // parameternaam namelijk niet twee keer in een query gebruiken.
+        // Two different parameter names with the same value: a native prepared
+        // statement may not use the same name twice.
         $statement = $pdo->prepare(
             'SELECT id, username, password_hash, role, status
                FROM users
@@ -52,78 +40,119 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         $gebruiker = $statement->fetch();
 
-        // password_verify vergelijkt het ingetypte wachtwoord met de hash
-        // uit de database. De hash zelf kun je niet terugrekenen.
         $wachtwoordKlopt = $gebruiker !== false
             && password_verify($wachtwoord, $gebruiker['password_hash']);
 
         if (!$wachtwoordKlopt) {
-
-            // Bewust een algemene melding: we zeggen niet of het e-mailadres
-            // bestaat. Anders kan iemand uitzoeken welke accounts er zijn.
+            // Deliberately general: do not reveal which accounts exist.
             $fout = 'E-mailadres of wachtwoord is onjuist.';
-
         } elseif ($gebruiker['status'] === 'blocked') {
-
-            // De statuscontrole komt NA het wachtwoord, zodat alleen iemand
-            // die het wachtwoord echt weet te horen krijgt dat het account
-            // geblokkeerd is.
             $fout = 'Dit account is geblokkeerd. Neem contact op met de beheerder.';
-
         } else {
-
-            // Alles klopt: de gebruiker in de sessie zetten.
             logInUser($gebruiker);
 
-            // Daarna doorsturen. Zo staat het formulier niet meer in de
-            // browser en krijg je geen "formulier opnieuw versturen?" vraag.
-            header('Location: ' . url('recepten.php'));
+            header('Location: ' . url('profiel.php'));
             exit;
         }
     }
 }
 
+// The four newest recipes for the right-hand panel.
+$nieuwsteStatement = $pdo->prepare(
+    "SELECT r.id,
+            r.user_id,
+            r.title,
+            r.description,
+            r.prep_time,
+            r.servings,
+            u.username AS auteur,
+            (SELECT rp.file_path
+               FROM recipe_photos rp
+              WHERE rp.recipe_id = r.id
+              ORDER BY rp.sort_order, rp.id
+              LIMIT 1) AS omslagfoto,
+            (SELECT GROUP_CONCAT(c.name ORDER BY c.id SEPARATOR ', ')
+               FROM recipe_categories rc
+               JOIN categories c ON c.id = rc.category_id
+              WHERE rc.recipe_id = r.id) AS categorieen
+       FROM recipes r
+       JOIN users u ON u.id = r.user_id
+      ORDER BY r.created_at DESC, r.id DESC
+      LIMIT 4"
+);
+$nieuwsteStatement->execute();
+$nieuwsteRecepten = $nieuwsteStatement->fetchAll();
+
 $paginaTitel = 'Inloggen';
+$navActive = 'profiel';
 require __DIR__ . '/templates/header.php';
 ?>
 
-<div class="container">
+<div class="container auth-page">
+    <div class="auth-layout">
+        <section class="auth-card">
+            <p class="eyebrow">Welkom terug</p>
+            <h1>Inloggen</h1>
+            <p class="auth-lead">Log in om recepten toe te voegen en te bewaren.</p>
 
-    <h1>Inloggen</h1>
+            <?php if (isset($_GET['uitgelogd'])): ?>
+                <div class="notice notice-success">Je bent uitgelogd.</div>
+            <?php endif; ?>
 
-    <?php if (isset($_GET['uitgelogd'])): ?>
-        <p class="empty">Je bent uitgelogd.</p>
-    <?php endif; ?>
+            <?php if (isset($_GET['registreren'])): ?>
+                <div class="notice notice-success">Je account is aangemaakt. Je kunt nu inloggen.</div>
+            <?php endif; ?>
 
-    <?php if (isset($_GET['registreren'])): ?>
-        <p class="empty">Je account is aangemaakt. Je kunt nu inloggen.</p>
-    <?php endif; ?>
+            <?php if ($fout !== ''): ?>
+                <div class="notice notice-error"><?= e($fout) ?></div>
+            <?php endif; ?>
 
-    <?php // NOTE FOR ROOZ AND GIJS: there is no error style yet, so this uses .empty ?>
-    <?php if ($fout !== ''): ?>
-        <p class="empty"><strong><?= e($fout) ?></strong></p>
-    <?php endif; ?>
+            <form class="auth-form" method="post" action="<?= e(url('login.php')) ?>">
+                <?= csrf_field() ?>
 
-    <form class="form" method="post" action="<?= e(url('login.php')) ?>">
+                <label class="field">
+                    E-mailadres of gebruikersnaam
+                    <input type="text" name="login" required autocomplete="username"
+                           value="<?= e($ingevuldeLogin) ?>">
+                </label>
 
-        <?= csrf_field() ?>
+                <label class="field">
+                    Wachtwoord
+                    <input type="password" name="password" required autocomplete="current-password">
+                </label>
 
-        <label class="field">
-            E-mailadres of gebruikersnaam
-            <input type="text" name="login" required value="<?= e($ingevuldeLogin) ?>">
-        </label>
+                <button class="btn btn-coral btn-block" type="submit">Inloggen</button>
+            </form>
 
-        <label class="field">
-            Wachtwoord
-            <input type="password" name="password" required>
-        </label>
+            <p class="auth-switch">
+                Nog geen account?
+                <a href="<?= e(url('registreren.php')) ?>">Registreren</a>
+            </p>
+        </section>
 
-        <div class="actions">
-            <button class="btn" type="submit">Inloggen</button>
-            <a class="btn light" href="<?= e(url('registreren.php')) ?>">Nog geen account?</a>
-        </div>
-    </form>
+        <section class="auth-showcase">
+            <div class="showcase-head">
+                <div>
+                    <p class="eyebrow">Van de keuken</p>
+                    <h2>Mijn recepten</h2>
+                </div>
+                <a class="btn btn-coral btn-sm" href="<?= e(url('toevoegen.php')) ?>">+ nieuw recept</a>
+            </div>
 
+            <?php if ($nieuwsteRecepten === []): ?>
+                <div class="empty-state">
+                    <h3>Nog geen recepten</h3>
+                    <p>Maak een account en deel het eerste recept.</p>
+                </div>
+            <?php else: ?>
+                <div class="recipe-grid recipe-grid-compact">
+                    <?php foreach ($nieuwsteRecepten as $recept): ?>
+                        <?php require __DIR__ . '/templates/recipe-card.php'; ?>
+                    <?php endforeach; ?>
+                </div>
+            <?php endif; ?>
+        </section>
+    </div>
 </div>
 
 <?php require __DIR__ . '/templates/footer.php'; ?>

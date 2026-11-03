@@ -219,11 +219,11 @@ INSERT INTO recipes (id, user_id, title, description, prep_time, servings) VALUE
 (4, 3, 'Chili sin carne', 'Vullende vegan chili voor de hele week.', 35, 4);
 
 INSERT INTO recipe_photos (recipe_id, file_path, sort_order) VALUES
-(1, 'uploads/recipes/shakshuka-1.jpg', 0),
-(1, 'uploads/recipes/shakshuka-2.jpg', 1),
-(2, 'uploads/recipes/aglio-e-olio.jpg', 0),
-(3, 'uploads/recipes/overnight-oats.jpg', 0),
-(4, 'uploads/recipes/chili-sin-carne.jpg', 0);
+(1, 'images/food-01.png', 0),
+(1, 'images/food-02.png', 1),
+(2, 'images/food-03.png', 0),
+(3, 'images/food-04.png', 0),
+(4, 'images/food-05.png', 0);
 
 INSERT INTO recipe_ingredients (recipe_id, ingredient_id, amount, unit) VALUES
 -- Shakshuka

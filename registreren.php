@@ -1,24 +1,19 @@
 <?php
-// Registratiepagina: een nieuw account aanmaken.
+// Registration page: create a new account.
 
-require __DIR__ . '/includes/db.php';   // geeft $pdo
-require __DIR__ . '/includes/auth.php'; // sessie, e(), url(), csrf
+require __DIR__ . '/includes/db.php';   // gives $pdo
+require __DIR__ . '/includes/auth.php'; // session, e(), url(), csrf
 
-// Wie al ingelogd is, hoeft geen account aan te maken.
 if (isLoggedIn()) {
-    header('Location: ' . url('recepten.php'));
+    header('Location: ' . url('profiel.php'));
     exit;
 }
 
-// Alle foutmeldingen samen, zodat de bezoeker ze in een keer ziet.
 $fouten = [];
-
-// De ingevulde waardes bewaren, behalve de wachtwoorden.
 $gebruikersnaam = '';
-$email          = '';
+$email = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-
     csrf_check();
 
     $gebruikersnaam  = trim($_POST['username'] ?? '');
@@ -26,12 +21,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $wachtwoord      = $_POST['password'] ?? '';
     $wachtwoordExtra = $_POST['password_repeat'] ?? '';
 
-    // ---------------------------------------------------------
-    // 1. Controleren wat er is ingevuld
-    // ---------------------------------------------------------
-
-    // Gebruikersnaam: 3 tot 50 tekens, alleen letters, cijfers, - en _
-    // De database staat maximaal 50 tekens toe.
+    // Username: 3 to 50 characters, letters, digits, - and _ only.
     if ($gebruikersnaam === '') {
         $fouten[] = 'Vul een gebruikersnaam in.';
     } elseif (mb_strlen($gebruikersnaam) < 3 || mb_strlen($gebruikersnaam) > 50) {
@@ -40,7 +30,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $fouten[] = 'Gebruik in je gebruikersnaam alleen letters, cijfers, - en _';
     }
 
-    // E-mailadres: PHP heeft hier een eigen controle voor.
+    // E-mail address.
     if ($email === '') {
         $fouten[] = 'Vul een e-mailadres in.';
     } elseif (filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
@@ -49,19 +39,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $fouten[] = 'Dit e-mailadres is te lang.';
     }
 
-    // Wachtwoord: minimaal 8 tekens en twee keer hetzelfde.
+    // Password: at least 8 characters and typed the same twice.
     if (mb_strlen($wachtwoord) < 8) {
         $fouten[] = 'Je wachtwoord moet minimaal 8 tekens lang zijn.';
     } elseif ($wachtwoord !== $wachtwoordExtra) {
         $fouten[] = 'De twee wachtwoorden zijn niet hetzelfde.';
     }
 
-    // ---------------------------------------------------------
-    // 2. Is de gebruikersnaam of het e-mailadres al bezet?
-    // ---------------------------------------------------------
-    // In de database staat een UNIQUE-regel op beide kolommen. Deze query is
-    // er alleen om een nette melding te kunnen geven.
-
+    // Is the username or e-mail already taken?
     if ($fouten === []) {
         $controle = $pdo->prepare(
             'SELECT username, email
@@ -75,8 +60,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         ]);
 
         foreach ($controle->fetchAll() as $bestaand) {
-            // Kleine letters vergelijken, want de database let niet op
-            // hoofdletters bij het vergelijken van tekst.
             if (mb_strtolower($bestaand['username']) === mb_strtolower($gebruikersnaam)) {
                 $fouten[] = 'Deze gebruikersnaam is al bezet.';
             }
@@ -87,20 +70,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 
-    // ---------------------------------------------------------
-    // 3. Opslaan
-    // ---------------------------------------------------------
-
+    // Save the account.
     if ($fouten === []) {
-
-        // password_hash versleutelt het wachtwoord. Het echte wachtwoord
-        // komt nooit in de database te staan, alleen deze hash.
-        // PASSWORD_DEFAULT laat PHP zelf de beste methode kiezen.
         $hash = password_hash($wachtwoord, PASSWORD_DEFAULT);
 
         try {
-            // role en status vullen we niet in: de database zet die zelf
-            // standaard op 'user' en 'active'.
             $opslaan = $pdo->prepare(
                 'INSERT INTO users (username, email, password_hash)
                  VALUES (:username, :email, :hash)'
@@ -111,19 +85,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'hash'     => $hash,
             ]);
 
-            // Doorsturen naar de inlogpagina met een melding.
             header('Location: ' . url('login.php?registreren=1'));
             exit;
-
         } catch (PDOException $fout) {
-
-            // Vangnet: als twee mensen op precies hetzelfde moment dezelfde
-            // naam kiezen, houdt de UNIQUE-regel in de database het alsnog
-            // tegen. Foutcode 23000 betekent "deze waarde bestaat al".
             if ($fout->getCode() === '23000') {
                 $fouten[] = 'Deze gebruikersnaam of dit e-mailadres is al bezet.';
             } else {
-                // Andere fouten alleen in het logboek, niet op het scherm.
                 error_log('Registreren mislukt: ' . $fout->getMessage());
                 $fouten[] = 'Er ging iets mis bij het opslaan. Probeer het later opnieuw.';
             }
@@ -131,59 +98,114 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
+// Four recipes for the right-hand panel.
+$nieuwsteStatement = $pdo->prepare(
+    "SELECT r.id,
+            r.user_id,
+            r.title,
+            r.description,
+            r.prep_time,
+            r.servings,
+            u.username AS auteur,
+            (SELECT rp.file_path
+               FROM recipe_photos rp
+              WHERE rp.recipe_id = r.id
+              ORDER BY rp.sort_order, rp.id
+              LIMIT 1) AS omslagfoto,
+            (SELECT GROUP_CONCAT(c.name ORDER BY c.id SEPARATOR ', ')
+               FROM recipe_categories rc
+               JOIN categories c ON c.id = rc.category_id
+              WHERE rc.recipe_id = r.id) AS categorieen
+       FROM recipes r
+       JOIN users u ON u.id = r.user_id
+      ORDER BY r.created_at DESC, r.id DESC
+      LIMIT 4"
+);
+$nieuwsteStatement->execute();
+$nieuwsteRecepten = $nieuwsteStatement->fetchAll();
+
 $paginaTitel = 'Account aanmaken';
+$navActive = 'profiel';
 require __DIR__ . '/templates/header.php';
 ?>
 
-<div class="container">
+<div class="container auth-page">
+    <div class="auth-layout">
+        <section class="auth-card">
+            <p class="eyebrow">Doe mee</p>
+            <h1>Account aanmaken</h1>
+            <p class="auth-lead">Maak een account om je eigen recepten te delen en te bewaren.</p>
 
-    <h1>Account aanmaken</h1>
-    <p>Maak een account om je eigen recepten te delen.</p>
+            <?php if ($fouten !== []): ?>
+                <div class="notice notice-error">
+                    <strong>Let op:</strong>
+                    <ul>
+                        <?php foreach ($fouten as $foutmelding): ?>
+                            <li><?= e($foutmelding) ?></li>
+                        <?php endforeach; ?>
+                    </ul>
+                </div>
+            <?php endif; ?>
 
-    <?php // NOTE FOR ROOZ AND GIJS: there is no error style yet, so this uses .empty ?>
-    <?php if ($fouten !== []): ?>
-        <div class="empty">
-            <strong>Let op:</strong>
-            <ul>
-                <?php foreach ($fouten as $foutmelding): ?>
-                    <li><?= e($foutmelding) ?></li>
-                <?php endforeach; ?>
-            </ul>
-        </div>
-    <?php endif; ?>
+            <form class="auth-form" method="post" action="<?= e(url('registreren.php')) ?>">
+                <?= csrf_field() ?>
 
-    <form class="form" method="post" action="<?= e(url('registreren.php')) ?>">
+                <label class="field">
+                    Gebruikersnaam
+                    <input type="text" name="username" required minlength="3" maxlength="50"
+                           autocomplete="username" value="<?= e($gebruikersnaam) ?>">
+                </label>
 
-        <?= csrf_field() ?>
+                <label class="field">
+                    E-mailadres
+                    <input type="email" name="email" required maxlength="255"
+                           autocomplete="email" value="<?= e($email) ?>">
+                </label>
 
-        <label class="field">
-            Gebruikersnaam
-            <input type="text" name="username" required minlength="3" maxlength="50"
-                   value="<?= e($gebruikersnaam) ?>">
-        </label>
+                <label class="field">
+                    Wachtwoord (minimaal 8 tekens)
+                    <input type="password" name="password" required minlength="8"
+                           autocomplete="new-password">
+                </label>
 
-        <label class="field">
-            E-mailadres
-            <input type="email" name="email" required maxlength="255"
-                   value="<?= e($email) ?>">
-        </label>
+                <label class="field">
+                    Wachtwoord nog een keer
+                    <input type="password" name="password_repeat" required minlength="8"
+                           autocomplete="new-password">
+                </label>
 
-        <label class="field">
-            Wachtwoord (minimaal 8 tekens)
-            <input type="password" name="password" required minlength="8">
-        </label>
+                <button class="btn btn-coral btn-block" type="submit">Account aanmaken</button>
+            </form>
 
-        <label class="field">
-            Wachtwoord nog een keer
-            <input type="password" name="password_repeat" required minlength="8">
-        </label>
+            <p class="auth-switch">
+                Ik heb al een account.
+                <a href="<?= e(url('login.php')) ?>">Inloggen</a>
+            </p>
+        </section>
 
-        <div class="actions">
-            <button class="btn" type="submit">Account aanmaken</button>
-            <a class="btn light" href="<?= e(url('login.php')) ?>">Ik heb al een account</a>
-        </div>
-    </form>
+        <section class="auth-showcase">
+            <div class="showcase-head">
+                <div>
+                    <p class="eyebrow">Van de keuken</p>
+                    <h2>Op het menu</h2>
+                </div>
+                <a class="btn btn-light btn-sm" href="<?= e(url('recepten.php')) ?>">Alles bekijken</a>
+            </div>
 
+            <?php if ($nieuwsteRecepten === []): ?>
+                <div class="empty-state">
+                    <h3>Nog geen recepten</h3>
+                    <p>Wees de eerste die iets deelt.</p>
+                </div>
+            <?php else: ?>
+                <div class="recipe-grid recipe-grid-compact">
+                    <?php foreach ($nieuwsteRecepten as $recept): ?>
+                        <?php require __DIR__ . '/templates/recipe-card.php'; ?>
+                    <?php endforeach; ?>
+                </div>
+            <?php endif; ?>
+        </section>
+    </div>
 </div>
 
 <?php require __DIR__ . '/templates/footer.php'; ?>
